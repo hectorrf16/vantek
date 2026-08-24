@@ -49,6 +49,7 @@
  */
 
 const https = require('https');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
@@ -120,6 +121,39 @@ function getConfig(): any {
 function getCurrentVersion(): string {
   try { return JSON.parse(fs.readFileSync(VERSION_PATH, 'utf-8')).version; }
   catch { return '0.0.0'; }
+}
+
+// ─── Comparación semántica de versiones ───────────────────────────────────────
+// Devuelve true SOLO si `latest` es estrictamente mayor que `current`.
+// Evita el falso positivo de actualización cuando la versión instalada es más
+// reciente que la última release (p. ej. instalada 1.5.5 vs release 1.5.2).
+// Compara los componentes numéricos major.minor.patch; ignora sufijos (-test, -rc…).
+
+function parseVersion(v: string): number[] {
+  const core = String(v).replace(/^v/, '').split('-')[0];
+  return core.split('.').map((n) => {
+    const parsed = parseInt(n, 10);
+    return isNaN(parsed) ? 0 : parsed;
+  });
+}
+
+function isNewerVersion(latest: string, current: string): boolean {
+  const a = parseVersion(latest);
+  const b = parseVersion(current);
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const na = a[i] ?? 0;
+    const nb = b[i] ?? 0;
+    if (na > nb) return true;
+    if (na < nb) return false;
+  }
+  return false; // iguales → no hay actualización
+}
+
+// Selecciona el módulo correcto (http/https) según el protocolo de la URL.
+// Los redirects de GitHub Assets pueden usar cualquiera de los dos.
+function httpModule(url: string): any {
+  return String(url).startsWith('http://') ? http : https;
 }
 
 // ─── Inicialización de ficheros de configuración ─────────────────────────────
@@ -235,7 +269,7 @@ function fetchLatestRelease(): Promise<any> {
 function downloadFile(url: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
-    https
+    httpModule(url)
       .get(url, { headers: { 'User-Agent': 'Vantek-Launcher' } }, (res: any) => {
         // Seguir redirecciones (GitHub Assets redirigen a S3)
         if (res.statusCode === 302 || res.statusCode === 301) {
@@ -307,8 +341,13 @@ public class IdleTime {
 `.trim();
 
   try {
+    // -EncodedCommand (Base64 UTF-16LE) para pasar el script tal cual: preserva
+    // saltos de línea y comillas, de modo que el terminador de here-string ("@ al
+    // inicio de línea) se reconoce. Con -Command "..." las comillas escapadas
+    // rompían el here-string → ParserError "Falta la cadena en el terminador".
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
     const output = execSync(
-      `powershell.exe -NoProfile -NonInteractive -Command "${script.replace(/"/g, '\\"')}"`,
+      `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encoded}`,
       { timeout: 5000, windowsHide: true }
     ).toString().trim();
 
@@ -368,8 +407,8 @@ async function checkForUpdate(): Promise<void> {
   const currentVersion = getCurrentVersion();
   state.version_actual = currentVersion;
 
-  if (latestVersion === currentVersion) {
-    log(`Sin actualizaciones. Versión actual: v${currentVersion}`);
+  if (!isNewerVersion(latestVersion, currentVersion)) {
+    log(`Sin actualizaciones. Versión actual: v${currentVersion} (última release: v${latestVersion})`);
     state.phase = 'sin_update';
     state.version_disponible = null;
     writeState();

@@ -23,8 +23,14 @@ on:
 permissions:
   contents: read
 
+# Incluimos github.workflow en la clave para que la CI invocada por release.yml
+# (workflow_call, github.workflow = "Release Windows") NO comparta grupo con la
+# CI de push/pull_request (github.workflow = "CI") sobre el mismo ref: si no,
+# ambas caen en el mismo grupo y `cancel-in-progress` las cancela mutuamente
+# (aparece "The operation was canceled"). Cada workflow+ref se cancela solo a sí
+# mismo en pushes rápidos.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,10 +40,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configurar Node 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: 'npm'
