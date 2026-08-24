@@ -55,3 +55,19 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
+
+  # Acciones de los workflows de GitHub Actions (.github/workflows/*). Mantiene
+  # actions/checkout, actions/setup-node, upload-artifact, action-gh-release… al
+  # día. Se fijan por major (p. ej. @v6), así que Dependabot solo abre PR para
+  # saltos de major, no para parches (poco ruido).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "deps(actions)"
+

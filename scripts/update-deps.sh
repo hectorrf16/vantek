@@ -23,6 +23,12 @@
 #   · Run `make build-sqlite && make test` afterwards: a fresh install leaves
 #     better-sqlite3 uncompiled (no prebuilt binary for this Node).
 #   · Always review the diff and run the gate (tsc + tests) before pushing.
+#   · This runs on Linux, so the regenerated lock only records the LINUX
+#     platform-optional native bindings (e.g. Vite 8's rolldown binding). Due to
+#     npm bug npm/cli#4828 the win32/darwin bindings are NOT written to the lock
+#     (and can't be added via --os/--cpu), so the Windows release job DELETES the
+#     lock and runs `npm install` to resolve its own native bindings. See
+#     .github/workflows/release.yml.
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
