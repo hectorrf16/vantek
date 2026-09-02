@@ -41,18 +41,22 @@
 
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '@middleware/errorHandler';
-import { getProfileConfig, getAppConfig, reloadProfileConfig, reloadAppConfig } from '@utils/config';
+import { getProfileConfig, getAppConfig, reloadProfileConfig, reloadAppConfig, saveAppConfig } from '@utils/config';
 import { verificarSmtp, enviarErrores } from '@services/email.service';
 import { listarErrores, contarErrores, borrarErrores } from '@services/errores.service';
 import { resetDatos } from '@services/reset.service';
+import { backupDb } from '@db/backup';
 import { CONFIG_DIR } from '@utils/paths';
 import fs from 'fs';
 import path from 'path';
 
 const router = Router();
 
-const APP_CONFIG_PATH   = path.join(CONFIG_DIR, 'app.config.json');
 const PROFILE_CONFIG_PATH = path.join(CONFIG_DIR, 'profile.config.json');
+
+// La contraseña SMTP nunca sale del servidor: se sustituye por este marcador y,
+// si vuelve tal cual en el PUT, se conserva la guardada.
+const PASS_MARCADOR = '__GUARDADA__';
 
 // GET /api/config/profile
 router.get('/profile', asyncHandler(async (_req: Request, res: Response) => {
@@ -61,7 +65,9 @@ router.get('/profile', asyncHandler(async (_req: Request, res: Response) => {
 
 // GET /api/config/app
 router.get('/app', asyncHandler(async (_req: Request, res: Response) => {
-  res.json(getAppConfig());
+  const cfg = structuredClone(getAppConfig()) as Record<string, any>;
+  if (cfg.email?.smtp?.pass) cfg.email.smtp.pass = PASS_MARCADOR;
+  res.json(cfg);
 }));
 
 // PUT /api/config/app
@@ -70,7 +76,11 @@ router.put('/app', asyncHandler(async (req: Request, res: Response) => {
   if (!nuevo || typeof nuevo !== 'object') {
     return res.status(400).json({ error: 'Body inválido' });
   }
-  fs.writeFileSync(APP_CONFIG_PATH, JSON.stringify(nuevo, null, 2), 'utf-8');
+  if (nuevo.email?.smtp?.pass === PASS_MARCADOR) {
+    nuevo.email.smtp.pass = getAppConfig().email?.smtp?.pass ?? '';
+  }
+  // saveAppConfig escribe de forma atómica (tmp + rename) y deja un .bak.
+  saveAppConfig(nuevo);
   reloadAppConfig();
   res.json({ ok: true });
 }));
@@ -141,8 +151,10 @@ router.post('/reset-datos', asyncHandler(async (req: Request, res: Response) => 
   if (req.body?.confirmar !== 'BORRAR') {
     return res.status(400).json({ error: 'Confirmación inválida.' });
   }
+  // Copia previa: el borrado es irreversible y no había forma de volver atrás.
+  const copia = backupDb('pre-reset');
   resetDatos();
-  res.json({ ok: true });
+  res.json({ ok: true, copia_seguridad: copia ? path.basename(copia) : null });
 }));
 
 export default router;

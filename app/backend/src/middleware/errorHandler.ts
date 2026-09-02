@@ -44,24 +44,31 @@ export function asyncHandler(
 
 // Error handler global
 export function errorHandler(
-  err: Error,
+  err: Error & { statusCode?: number },
   req: Request,
   res: Response,
   _next: NextFunction
 ) {
-  console.error('[ERROR]', err.message);
+  // Los servicios lanzan Error con statusCode para los 4xx previstos (404, 409,
+  // 400…). Antes se ignoraba y todos salían como 500, ensuciando el log de
+  // errores con fallos que no son del servidor.
+  const status = err.statusCode ?? (err.name === 'ZodError' ? 400 : 500);
+
+  if (status >= 500) {
+    console.error('[ERROR]', err.message);
+    registrarError({
+      mensaje: err.message || 'Error interno del servidor',
+      stack: err.stack ?? null,
+      ruta: req.originalUrl,
+      metodo: req.method,
+      status,
+    });
+  }
+
   if (err.name === 'ZodError') {
     return res.status(400).json({ error: 'Datos inválidos', details: err });
   }
-  // Solo registramos errores de servidor (5xx); las validaciones 4xx no son fallos.
-  registrarError({
-    mensaje: err.message || 'Error interno del servidor',
-    stack: err.stack ?? null,
-    ruta: req.originalUrl,
-    metodo: req.method,
-    status: 500,
-  });
-  return res.status(500).json({ error: err.message || 'Error interno del servidor' });
+  return res.status(status).json({ error: err.message || 'Error interno del servidor' });
 }
 
 // 404

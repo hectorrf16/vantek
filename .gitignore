@@ -32,4 +32,5 @@ tools/
 puppeteer/
 .puppeteer-cache/
 release/
-Vantek-release.zip
+Vantek-*.zip
+SHA256SUMS.txt

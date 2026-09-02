@@ -1,6 +1,6 @@
 {
   "name": "vantek",
-  "version": "0.1.0",
+  "version": "1.5.0",
   "private": true,
   "workspaces": [
     "app/backend",
@@ -11,10 +11,13 @@
     "build": "npm run build --workspace=app/frontend && npm run build --workspace=app/backend && npm run build:launcher",
     "build:launcher": "tsc -p launcher/tsconfig.json",
     "start": "npm run start --workspace=app/backend",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "npm run test --workspace=app/backend && npm run test --workspace=app/frontend"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "overrides": {
     "@types/express": {

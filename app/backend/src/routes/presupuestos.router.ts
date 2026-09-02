@@ -49,6 +49,7 @@ import { generarPdf } from '@services/pdf.service';
 import { guardarVersion } from '@services/presupuestos.service';
 import { enviarPresupuesto } from '@services/email.service';
 import { PDFS_DIR } from '@utils/paths';
+import { lineasSchema, parsear } from '@utils/validacion';
 
 const router = Router();
 
@@ -83,9 +84,8 @@ router.put('/:id', asyncHandler(async (req, res) => {
 
 // Guardar líneas (save explícito)
 router.put('/:id/lineas', asyncHandler(async (req, res) => {
-  const { lineas } = req.body;
-  if (!Array.isArray(lineas)) return res.status(400).json({ error: 'lineas debe ser un array' });
-  await svc.guardarLineas(req.params.id, lineas);
+  const lineas = parsear(lineasSchema, req.body?.lineas);
+  await svc.guardarLineas(req.params.id, lineas as any);
   const datos = await svc.obtenerPresupuesto(req.params.id);
   res.json(datos);
 }));

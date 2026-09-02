@@ -271,6 +271,7 @@ export interface Factura extends BaseEntity {
   iva_importe: number;
   total: number;
   anticipo_total?: number;
+  anticipo_aplicado?: number;
   restante?: number;
 }
 

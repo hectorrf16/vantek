@@ -251,8 +251,10 @@ export function buildAppConfig(payload: SetupPayload): AppConfig {
     sistema: {
       email_errores: '',
       actualizacion: {
-        hora_inicio: '15:00',
-        hora_fin: '16:00',
+        // Madrugada: la ventana anterior (15:00–16:00) caía en plena jornada,
+        // y el reinicio corta cualquier trabajo en curso.
+        hora_inicio: '03:00',
+        hora_fin: '05:00',
         inactividad_minutos: 15,
       }
     },

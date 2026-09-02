@@ -21,8 +21,8 @@ vantek/
 
 ## Requisitos (desarrollo)
 
-- Node.js 22+
-- npm 10+
+- Node.js 24+
+- npm 11+
 
 ## Desarrollo
 
@@ -46,7 +46,7 @@ de modo que nada externo puede romper la aplicación.
 ### Primera instalación (la realiza el técnico)
 
 1. Abrir la página del [último release](https://github.com/HeRoDaRu/vantek/releases/latest)
-   y descargar `Vantek-release.zip`.
+   y descargar `Vantek-<version>.zip`.
 2. Extraer el ZIP en una carpeta temporal. `install.ps1` viene incluido dentro.
 3. Abrir **PowerShell como Administrador** en esa carpeta y ejecutar:
 
@@ -55,12 +55,12 @@ de modo que nada externo puede romper la aplicación.
    .\install.ps1
    ```
 
-   El script descarga el último release (`Vantek-release.zip`) desde GitHub, lo
-   extrae en `C:\Vantek` (configurable con `-InstallDir`), descarga Node.js 22
+   El script descarga el último release (`Vantek-<version>.zip`) desde GitHub, lo
+   extrae en `C:\Vantek` (configurable con `-InstallDir`), descarga Node.js 24
    portable en `node\`, NSSM en `tools\nssm.exe` y registra el servicio de
    Windows **VANTEK**.
 
-4. Abrir la aplicación en `http://localhost`. La primera vez, la propia
+4. Abrir la aplicación en `http://localhost:3000`. La primera vez, la propia
    aplicación muestra el asistente de configuración.
 
 ### Arranque manual (sin servicio)
@@ -73,7 +73,7 @@ servicio pero en primer plano.
 Al publicar un tag `vX.Y.Z`, el workflow `.github/workflows/release.yml`
 (GitHub Actions sobre `windows-latest`) compila frontend, backend y launcher,
 incluye el Chromium de Puppeteer y el instalador `install.ps1`, y publica el
-asset `Vantek-release.zip`.
+asset `Vantek-<version>.zip`.
 
 ### Motor de PDF (Chromium)
 
@@ -94,7 +94,7 @@ El perfil de negocio se configura en `config/profile.config.json`.
 ## Actualización de la app
 
 Las actualizaciones son automáticas: el launcher descarga el mismo
-`Vantek-release.zip` de cada nueva release de GitHub y lo aplica en la ventana
+`Vantek-<version>.zip` de cada nueva release de GitHub y lo aplica en la ventana
 horaria configurada. `node\` y `tools\` no viajan en las actualizaciones, por lo
 que sobreviven a cada update. También pueden aplicarse manualmente desde
 Configuración > Sistema.

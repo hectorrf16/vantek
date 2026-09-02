@@ -101,9 +101,10 @@ async function getPendientes(): Promise<PendienteAccion[]> {
   const pendientes: PendienteAccion[] = []
   const hoy = new Date();
   const config = getAppConfig();
-  const diasAntiguo = (config as any).dashboard?.dias_presupuesto_antiguo ?? 30;
-  const diasSinCobrar = (config as any).dashboard?.dashboard?.dias_factura_sin_cobrar ?? 30;
-
+  const diasAntiguo = config.dashboard?.dias_presupuesto_antiguo ?? 30;
+  // Antes se leía config.dashboard.dashboard.… (clave duplicada), así que el
+  // valor configurado se ignoraba siempre y quedaba fijo en 30 días.
+  const diasSinCobrar = config.dashboard?.dias_factura_sin_cobrar ?? 30;
 
   // 1. Presupuestos enviados sin convertir a aceptado (todos los "enviados")
   const presupuestosEnviados = db.prepare(`
@@ -211,8 +212,11 @@ async function getResumen(agrupacion: 'mes' | 'trimestre' | 'anio'): Promise<Res
   const estadosProyeccion = ['cerrada', 'entregada', 'pendiente_pago', 'pagada'];
   const placeholders = estadosProyeccion.map(() => '?').join(',');
 
+  // La facturación se ancla a la fecha del documento (fecha_cierre si existe,
+  // si no la fecha de la factura). Con updated_at, cualquier cambio de estado o
+  // reenvío posterior movía el ingreso al periodo actual.
   const facturas = db.prepare(`
-  SELECT f.estado, f.updated_at as fecha,
+  SELECT f.estado, COALESCE(f.fecha_cierre, f.fecha, f.updated_at) as fecha,
          COALESCE((
            SELECT SUM(fl.precio_unitario * fl.cantidad)
            FROM factura_lineas fl
@@ -220,7 +224,7 @@ async function getResumen(agrupacion: 'mes' | 'trimestre' | 'anio'): Promise<Res
          ), 0) as total
   FROM facturas f
   WHERE f.estado IN (${placeholders})
-  ORDER BY f.updated_at ASC
+  ORDER BY fecha ASC
 `).all(...estadosProyeccion) as any[];
 
   // Agrupa por periodo

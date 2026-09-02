@@ -45,7 +45,7 @@
  * ──────────────────────────────────────────────────────────────────────────────
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useConfigStore } from '@store/config.store';
 import Layout from '@components/Layout/Layout';
@@ -62,29 +62,44 @@ import DashboardPage from '@pages/Dashboard/DashboardPage';
 import ConfigPage from '@pages/Config/ConfigPage';
 import SeguimientoPage from '@pages/Seguimiento/SeguimientoPage';
 import SeguimientoFichaPage from '@pages/Seguimiento/SeguimientoFichaPage';
+import LoginPage from '@pages/Login/LoginPage';
+import { onSesionCaducada } from '@utils/api';
 import Spinner from '@ui/Spinner';
 
 export default function App() {
   const { load } = useConfigStore();
   const [configState, setConfigState] = useState<'loading' | 'setup' | 'ready' | 'error'>('loading');
+  const [autenticado, setAutenticado] = useState(true);
 
   useEffect(() => {
-    async function init() {
-      try {
-        const res = await fetch('/api/setup/status');
-        const data = await res.json();
-        if (data.necesita_setup) {
-          setConfigState('setup');
-          return;
-        }
-        await load();
+    // El interceptor de axios avisa cuando el backend responde 401.
+    onSesionCaducada(() => setAutenticado(false));
+  }, []);
+
+  const init = useCallback(async () => {
+    try {
+      const sesion = await fetch('/api/auth/estado').then(r => r.json());
+      if (!sesion.autenticado) {
+        setAutenticado(false);
         setConfigState('ready');
-      } catch {
-        setConfigState('error');
+        return;
       }
+      setAutenticado(true);
+
+      const res = await fetch('/api/setup/status');
+      const data = await res.json();
+      if (data.necesita_setup) {
+        setConfigState('setup');
+        return;
+      }
+      await load();
+      setConfigState('ready');
+    } catch {
+      setConfigState('error');
     }
-    init();
   }, [load]);
+
+  useEffect(() => { init(); }, [init]);
 
   if (configState === 'loading') {
     return (
@@ -103,6 +118,10 @@ export default function App() {
         </span>
       </div>
     );
+  }
+
+  if (!autenticado) {
+    return <LoginPage onAcceso={() => { setConfigState('loading'); init(); }} />;
   }
 
   return (

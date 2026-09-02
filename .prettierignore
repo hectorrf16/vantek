@@ -1,0 +1,7 @@
+dist/
+node_modules/
+release/
+launcher/launcher.js
+app/frontend/public/
+package-lock.json
+*.md

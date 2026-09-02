@@ -21,6 +21,7 @@
  * ──────────────────────────────────────────────────────────────────────────────
  */
 
+import type BetterSqlite3 from 'better-sqlite3';
 import { getDb } from '@db/connection';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -38,7 +39,7 @@ export function limpiarBd(): void {
   for (const t of TABLAS) db.prepare(`DELETE FROM ${t}`).run();
 }
 
-export function db() {
+export function db(): BetterSqlite3.Database {
   return getDb();
 }
 

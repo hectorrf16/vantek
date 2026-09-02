@@ -30,6 +30,7 @@
  */
 
 import { getDb } from '@db/connection';
+import { backupDb } from '@db/backup';
 
 const migrations: { version: number; sql: string }[] = [
   {
@@ -390,6 +391,18 @@ const migrations: { version: number; sql: string }[] = [
       ALTER TABLE presupuesto_lineas ADD COLUMN detalle TEXT;
       ALTER TABLE factura_lineas ADD COLUMN detalle TEXT;
     `
+  },
+  {
+    version: 10,
+    sql: `
+      -- La serie de facturas es correlativa y ÚNICA por ley. Antes solo lo
+      -- garantizaba el código (y no lo hacía: numeraba con COUNT(*)). Este
+      -- índice parcial impide a nivel de BD que se emitan dos facturas con el
+      -- mismo número dentro del mismo año; los borradores (numero NULL) quedan
+      -- fuera del índice.
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_factura_serie
+        ON facturas(anio_numero, numero) WHERE numero IS NOT NULL;
+    `
   }
 ];
 
@@ -412,10 +425,31 @@ export function runMigrations(): void {
     return;
   }
 
+  // Copia previa: si una migración deja el esquema inservible, el usuario tiene
+  // de dónde recuperar sin perder facturas.
+  if (currentVersion > 0) backupDb(`pre-migracion-v${currentVersion}`);
+
   for (const migration of pending) {
     console.log(`[DB] Ejecutando migración v${migration.version}...`);
-    db.exec(migration.sql);
-    db.prepare('INSERT INTO _migraciones (version) VALUES (?)').run(migration.version);
+
+    // PRAGMA foreign_keys es un no-op dentro de una transacción, así que las
+    // migraciones que lo usan (reconstrucción de tabla) lo aplican fuera.
+    const tocaFks = /PRAGMA\s+foreign_keys/i.test(migration.sql);
+    const sql = migration.sql.replace(/PRAGMA\s+foreign_keys\s*=\s*\w+\s*;/gi, '');
+
+    if (tocaFks) db.pragma('foreign_keys = OFF');
+    try {
+      // Migración + registro de versión en la MISMA transacción: un fallo a
+      // mitad revierte todo y deja la BD utilizable (antes quedaba a medias y
+      // el reintento del siguiente arranque fallaba para siempre).
+      db.transaction(() => {
+        db.exec(sql);
+        db.prepare('INSERT INTO _migraciones (version) VALUES (?)').run(migration.version);
+      })();
+    } finally {
+      if (tocaFks) db.pragma('foreign_keys = ON');
+    }
+
     console.log(`[DB] Migración v${migration.version} completada.`);
   }
 }

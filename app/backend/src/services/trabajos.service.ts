@@ -38,7 +38,7 @@
 
 import { getDb } from '@db/connection';
 import { v4 as uuidv4 } from 'uuid';
-import { Trabajo, TrabajoConContexto, TrabajoBrief } from '../types';
+import { Trabajo, TrabajoConContexto } from '../types';
 import { getAppConfig } from '@utils/config';
 
 export const trabajosService = {

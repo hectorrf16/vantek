@@ -86,6 +86,8 @@ export interface Factura {
   versiones: { id: string; numero_version: number; pdf_path: string; created_at: string }[];
   totales: { subtotal: number; iva: number; iva_porcentaje: number; total: number };
   anticipo_total?: number;
+  anticipo_aplicado?: number;
+  trabajo_margen?: number | null;
   restante?: number;
   borrador_data: string | null;
   borrador_updated_at: string | null;
@@ -179,8 +181,9 @@ export const useFacturasStore = create<FacturasStore>((set) => ({
       set({ actual: res.data.factura });
       return { ok: true };
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })
-        ?.response?.data?.error ?? 'Error al cerrar la factura';
+      // El interceptor de axios ya normaliza a Error(message) con el texto del
+      // backend: leer err.response aquí daba siempre el mensaje genérico.
+      const msg = (err as Error)?.message || 'Error al cerrar la factura';
       return { ok: false, error: msg };
     }
   },

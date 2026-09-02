@@ -49,7 +49,7 @@ import { Albaran, AlbaranListItem, AlbaranLinea } from '../types';
 export const albanesService = {
 
   findAll(filtros?: {
-    estado?: 'sin_asignar' | 'asignado';
+    estado?: 'sin_asignar' | 'parcial' | 'asignado';
     proveedor?: string;
     fecha_desde?: string;
     fecha_hasta?: string;
@@ -72,18 +72,21 @@ export const albanesService = {
       params.push(filtros.fecha_hasta);
     }
 
+    // Los recuentos van por subconsulta y NO por GROUP BY (al.id, t.id): al
+    // agrupar también por trabajo, un albarán parcialmente asignado salía
+    // duplicado (una fila "asignado" y otra "sin_asignar") y el estado
+    // "parcial" era matemáticamente inalcanzable.
     const rows = db.prepare(`
       SELECT
         al.id, al.proveedor_nombre, al.numero, al.fecha, al.created_at,
-        t.id as trabajo_id, t.nombre as trabajo_nombre,
-        COUNT(DISTINCT alinea.id) as lineas_count,
-        COUNT(DISTINCT alt.id) as lineas_asignadas
+        (SELECT COUNT(*) FROM albaran_lineas alinea
+          WHERE alinea.albaran_id = al.id) AS lineas_count,
+        (SELECT COUNT(DISTINCT alt.albaran_linea_id)
+           FROM albaran_linea_trabajo alt
+           JOIN albaran_lineas alinea ON alinea.id = alt.albaran_linea_id
+          WHERE alinea.albaran_id = al.id) AS lineas_asignadas
       FROM albaranes al
-      LEFT JOIN albaran_lineas alinea ON alinea.albaran_id = al.id
-      LEFT JOIN albaran_linea_trabajo alt ON alt.albaran_linea_id = alinea.id
-      LEFT JOIN trabajos t ON t.id = alt.trabajo_id
       ${where}
-      GROUP BY al.id, t.id
       ORDER BY al.fecha DESC
     `).all(...params) as any[];
 
@@ -97,8 +100,9 @@ export const albanesService = {
     }));
 
     if (!filtros?.estado) return result;
+    if (filtros.estado === 'parcial') return result.filter(r => r.estado === 'parcial');
     if (filtros.estado === 'sin_asignar') return result.filter(r => r.estado === 'sin_asignar');
-    if (filtros.estado === 'asignado') return result.filter(r => r.estado !== 'sin_asignar');
+    if (filtros.estado === 'asignado') return result.filter(r => r.estado === 'asignado');
     return result;
   },
 
@@ -108,26 +112,35 @@ export const albanesService = {
     if (!albaran) return null;
 
     const lineas = db.prepare(`
-      SELECT
-        alinea.*,
-        GROUP_CONCAT(alt.trabajo_id) as trabajo_ids,
-        GROUP_CONCAT(t.nombre) as trabajo_nombres
-      FROM albaran_lineas alinea
-      LEFT JOIN albaran_linea_trabajo alt ON alt.albaran_linea_id = alinea.id
+      SELECT * FROM albaran_lineas
+      WHERE albaran_id = ?
+      ORDER BY orden ASC
+    `).all(id) as any[];
+
+    // Consulta aparte en lugar de dos GROUP_CONCAT emparejados por índice: un
+    // nombre de obra con una coma descuadraba la correspondencia id↔nombre.
+    const asignaciones = db.prepare(`
+      SELECT alt.albaran_linea_id, alt.trabajo_id, t.nombre AS trabajo_nombre
+      FROM albaran_linea_trabajo alt
+      JOIN albaran_lineas alinea ON alinea.id = alt.albaran_linea_id
       LEFT JOIN trabajos t ON t.id = alt.trabajo_id
       WHERE alinea.albaran_id = ?
-      GROUP BY alinea.id
-      ORDER BY alinea.orden ASC
-    `).all(id) as any[];
+    `).all(id) as {
+      albaran_linea_id: string;
+      trabajo_id: string;
+      trabajo_nombre: string | null;
+    }[];
+
+    const porLinea = new Map<string, { trabajo_id: string; trabajo_nombre: string }[]>();
+    for (const a of asignaciones) {
+      const lista = porLinea.get(a.albaran_linea_id) ?? [];
+      lista.push({ trabajo_id: a.trabajo_id, trabajo_nombre: a.trabajo_nombre ?? '' });
+      porLinea.set(a.albaran_linea_id, lista);
+    }
 
     albaran.lineas = lineas.map(l => ({
       ...l,
-      trabajos_asignados: l.trabajo_ids
-        ? l.trabajo_ids.split(',').map((tid: string, i: number) => ({
-            trabajo_id: tid,
-            trabajo_nombre: l.trabajo_nombres?.split(',')[i] ?? ''
-          }))
-        : []
+      trabajos_asignados: porLinea.get(l.id) ?? [],
     }));
 
     return albaran;

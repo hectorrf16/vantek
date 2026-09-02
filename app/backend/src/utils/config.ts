@@ -38,7 +38,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { CONFIG_DIR } from '@utils/paths';
+import { APP_ROOT, CONFIG_DIR } from '@utils/paths';
 
 const PROFILE_PATH = path.join(CONFIG_DIR, 'profile.config.json');
 const APP_PATH = path.join(CONFIG_DIR, 'app.config.json');
@@ -164,14 +164,44 @@ export function getProfileConfig(): ProfileConfig {
 
 export function getAppConfig(): AppConfig {
   if (!appCache) {
-    appCache = JSON.parse(fs.readFileSync(APP_PATH, 'utf-8'));
+    appCache = leerConfigConRespaldo();
   }
   return appCache!;
 }
 
+// app.config.json guarda las credenciales SMTP y los datos de empresa. Si el
+// fichero quedó corrupto (corte a mitad de escritura antes de que fuera
+// atómica), se recupera de la última copia buena en lugar de tumbar la app.
+function leerConfigConRespaldo(): AppConfig {
+  try {
+    return JSON.parse(fs.readFileSync(APP_PATH, 'utf-8'));
+  } catch (err) {
+    const bak = `${APP_PATH}.bak`;
+    if (fs.existsSync(bak)) {
+      console.error('[Config] app.config.json ilegible, recuperando de .bak:', err);
+      const recuperado = JSON.parse(fs.readFileSync(bak, 'utf-8'));
+      escribirAtomico(APP_PATH, JSON.stringify(recuperado, null, 2));
+      return recuperado;
+    }
+    throw err;
+  }
+}
+
+// Escritura atómica: fichero temporal + rename. Un fallo o disco lleno a mitad
+// dejaba antes app.config.json truncado y la app inutilizable.
+function escribirAtomico(destino: string, contenido: string): void {
+  const tmp = `${destino}.tmp`;
+  fs.writeFileSync(tmp, contenido, 'utf-8');
+  fs.renameSync(tmp, destino);
+}
+
 export function saveAppConfig(config: AppConfig): void {
+  const serializado = JSON.stringify(config, null, 2);
+  if (fs.existsSync(APP_PATH)) {
+    try { fs.copyFileSync(APP_PATH, `${APP_PATH}.bak`); } catch { /* opcional */ }
+  }
+  escribirAtomico(APP_PATH, serializado);
   appCache = config;
-  fs.writeFileSync(APP_PATH, JSON.stringify(config, null, 2), 'utf-8');
 }
 
 export function reloadAppConfig(): void {
@@ -214,9 +244,16 @@ function mergeDeep(template: any, actual: any): { resultado: any; cambios: numbe
 }
 
 export function migrateConfig(): void {
-  const templatePath = path.join(CONFIG_DIR, 'app.config.template.json');
+  // En Windows el template viaja dentro de config/; en Docker el entrypoint
+  // solo siembra los config reales y las plantillas viven en config-default/.
+  // Sin este segundo candidato, las claves nuevas NUNCA se añadían en Linux.
+  const candidatos = [
+    path.join(CONFIG_DIR, 'app.config.template.json'),
+    path.join(APP_ROOT, 'config-default', 'app.config.template.json'),
+  ];
+  const templatePath = candidatos.find(p => fs.existsSync(p));
 
-  if (!fs.existsSync(templatePath) || !fs.existsSync(APP_PATH)) {
+  if (!templatePath || !fs.existsSync(APP_PATH)) {
     // Sin template o sin config real no hay nada que migrar
     return;
   }
@@ -228,7 +265,7 @@ export function migrateConfig(): void {
     const { resultado, cambios } = mergeDeep(template, actual);
 
     if (cambios > 0) {
-      fs.writeFileSync(APP_PATH, JSON.stringify(resultado, null, 2), 'utf-8');
+      escribirAtomico(APP_PATH, JSON.stringify(resultado, null, 2));
       appCache = null; // invalidar caché
       console.log(`[Config] Migrate: ${cambios} clave(s) nueva(s) añadida(s) al app.config.json`);
     }

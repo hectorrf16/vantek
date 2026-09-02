@@ -7,6 +7,15 @@ services:
       target: backend        # ← apunta al stage "backend" del Dockerfile unificado
     container_name: vantek-backend
     restart: unless-stopped
+    # Node corre como PID 1: sin init, SIGTERM se ignora y `docker stop` acaba
+    # siempre en SIGKILL con el WAL de SQLite abierto.
+    init: true
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - NODE_ENV=production
     volumes:
@@ -32,6 +41,11 @@ services:
       target: nginx          # ← apunta al stage "nginx" del Dockerfile unificado
     container_name: vantek-frontend
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "8080:80"
     depends_on:
@@ -39,8 +53,6 @@ services:
         condition: service_healthy
     networks:
       - vantek-internal
-    volumes:
-      - vantek-pdfs:/var/www/vantek/pdfs:ro
 
 volumes:
   vantek-data:

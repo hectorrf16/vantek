@@ -52,8 +52,8 @@
     "email_errores": "",
     "chromium_modo": "bundled",
     "actualizacion": {
-      "hora_inicio": "15:00",
-      "hora_fin": "16:00",
+      "hora_inicio": "03:00",
+      "hora_fin": "05:00",
       "inactividad_minutos": 15
     }
   }

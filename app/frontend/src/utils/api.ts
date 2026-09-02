@@ -37,16 +37,28 @@ const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
   timeout: 15000,
+  withCredentials: true,   // cookie de sesión
 });
+
+// Se avisa a la app cuando el backend responde 401 para que muestre el login
+// sin recargar ni dejar la pantalla a medias.
+type ManejadorNoAutorizado = () => void;
+let alPerderSesion: ManejadorNoAutorizado | null = null;
+export function onSesionCaducada(fn: ManejadorNoAutorizado) {
+  alPerderSesion = fn;
+}
 
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     const message = err.response?.data?.error || err.message || 'Error de conexión';
-    // Si la petición no fue cancelada, notificar al usuario globalmente.
-    if (!axios.isCancel(err)) {
-      notificarError(message);
+    if (axios.isCancel(err)) return Promise.reject(new Error(message));
+
+    if (err.response?.status === 401) {
+      alPerderSesion?.();
+      return Promise.reject(new Error(message));
     }
+    notificarError(message);
     return Promise.reject(new Error(message));
   }
 );
