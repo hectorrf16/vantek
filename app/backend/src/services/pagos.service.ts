@@ -37,11 +37,9 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '@db/connection';
+import { redondear } from '@utils/dinero';
+import { hoyISO } from '@utils/fechas';
 import type { ObraPago, ObraPagoTipo } from '../types';
-
-function redondear(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
-}
 
 export function listarPagos(trabajoId: string): ObraPago[] {
   const db = getDb();
@@ -84,7 +82,7 @@ export function crearPago(
   const importe = tipo === 'porcentaje' ? redondear((valor / 100) * (base ?? 0)) : redondear(valor);
 
   const id = uuidv4();
-  const fecha = data.fecha ?? new Date().toISOString().slice(0, 10);
+  const fecha = data.fecha ?? hoyISO();
 
   db.prepare(
     `INSERT INTO obra_pagos (id, trabajo_id, tipo, valor, importe, base, nota, fecha)

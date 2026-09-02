@@ -1,6 +1,6 @@
 /**
  * ──────────────────────────────────────────────────────────────────────────────
- * migrate.test.ts — Schema migrations reach v9 and are idempotent
+ * migrate.test.ts — Schema migrations reach v10 and are idempotent
  * ──────────────────────────────────────────────────────────────────────────────
  */
 
@@ -9,9 +9,9 @@ import { db } from './helpers/db';
 import { runMigrations } from '@db/migrate';
 
 describe('runMigrations', () => {
-  it('applied all migrations up to v9 during setup', () => {
+  it('applied all migrations up to v10 during setup', () => {
     const max = (db().prepare('SELECT MAX(version) AS v FROM _migraciones').get() as { v: number }).v;
-    expect(max).toBe(9);
+    expect(max).toBe(10);
   });
 
   it('is idempotent — running again applies nothing and does not throw', () => {
@@ -43,5 +43,12 @@ describe('runMigrations', () => {
     const pCols = (db().prepare(`PRAGMA table_info(presupuesto_lineas)`).all() as { name: string }[]).map(c => c.name);
     expect(fCols).toContain('detalle');
     expect(pCols).toContain('detalle');
+  });
+
+  it('enforces a unique invoice series at DB level (v10)', () => {
+    const idx = db()
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ux_factura_serie'`)
+      .get() as { name: string } | undefined;
+    expect(idx?.name).toBe('ux_factura_serie');
   });
 });

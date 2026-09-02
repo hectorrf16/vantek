@@ -33,6 +33,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/errorHandler';
 import * as PagosService from '../services/pagos.service';
+import { pagoSchema, parsear } from '../utils/validacion';
 
 const router = Router({ mergeParams: true });
 
@@ -50,11 +51,14 @@ router.post(
   '/',
   asyncHandler(async (req, res) => {
     const trabajoId = req.params.trabajoId;
-    const { tipo, valor, base, nota, fecha } = req.body ?? {};
-    if (tipo !== 'fijo' && tipo !== 'porcentaje') {
-      return res.status(400).json({ error: "tipo debe ser 'fijo' o 'porcentaje'" });
-    }
-    const pago = PagosService.crearPago(trabajoId, { tipo, valor, base, nota, fecha });
+    const datos = parsear(pagoSchema, req.body ?? {});
+    const pago = PagosService.crearPago(trabajoId, {
+      tipo: datos.tipo,
+      valor: datos.valor,
+      base: datos.base ?? null,
+      nota: datos.nota ?? undefined,
+      fecha: datos.fecha,
+    });
     res.status(201).json({ data: pago });
   })
 );

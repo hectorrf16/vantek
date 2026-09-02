@@ -89,7 +89,7 @@ function nuevaLinea(): LineaNueva {
 function normalizarFecha(s: string): string {
   if (!s) return '';
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
   if (m) {
     const [, d, mes, a] = m;
     const anio = a.length === 2 ? `20${a}` : a;

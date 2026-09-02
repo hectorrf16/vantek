@@ -49,6 +49,7 @@ import * as svc from '@services/facturas.service';
 import { generarPdf } from '@services/pdf.service';
 import { enviarFactura } from '@services/email.service';
 import { PDFS_DIR } from '@utils/paths';
+import { lineasSchema, parsear } from '@utils/validacion';
 
 const router = Router();
 
@@ -82,9 +83,8 @@ router.post('/', asyncHandler(async (req, res) => {
 
 // Guardar líneas
 router.put('/:id/lineas', asyncHandler(async (req, res) => {
-  const { lineas } = req.body;
-  if (!Array.isArray(lineas)) return res.status(400).json({ error: 'lineas debe ser un array' });
-  await svc.guardarLineas(req.params.id, lineas);
+  const lineas = parsear(lineasSchema, req.body?.lineas);
+  await svc.guardarLineas(req.params.id, lineas as any);
   const datos = await svc.obtenerFactura(req.params.id);
   res.json(datos);
 }));

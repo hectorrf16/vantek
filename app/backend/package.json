@@ -1,6 +1,6 @@
 {
   "name": "@vantek/backend",
-  "version": "0.1.0",
+  "version": "1.5.0",
   "private": true,
   "main": "dist/index.js",
   "scripts": {
@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "db:migrate": "tsx src/db/migrate.ts",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -31,6 +32,7 @@
     "@types/express": "^5.0.6",
     "@types/nodemailer": "^8.0.1",
     "@types/uuid": "^11.0.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "tsc-alias": "^1.9.0",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3",

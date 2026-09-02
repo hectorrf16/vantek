@@ -121,7 +121,8 @@ export default function ClienteFichaPage() {
   const toggleExpanded = (aid: string) =>
     setExpanded(prev => {
       const next = new Set(prev);
-      next.has(aid) ? next.delete(aid) : next.add(aid);
+      if (next.has(aid)) next.delete(aid);
+      else next.add(aid);
       return next;
     });
 

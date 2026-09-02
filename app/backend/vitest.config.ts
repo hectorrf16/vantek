@@ -47,5 +47,13 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     setupFiles: ['tests/setup.ts'],
     pool: 'forks',
+    // Medición de cobertura (npm run test:coverage). Los umbrales están al
+    // nivel actual: sirven para que la cobertura no BAJE, no como objetivo.
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      include: ['src/services/**', 'src/utils/**', 'src/db/**'],
+      thresholds: { lines: 35, functions: 40, statements: 35, branches: 55 },
+    },
   },
 });

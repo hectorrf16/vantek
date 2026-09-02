@@ -46,13 +46,22 @@ let workerPromise: Promise<Worker> | null = null;
 
 export async function preinicializarTesseract(): Promise<void> {
   if (workerSingleton || workerPromise) return;
-  workerPromise = createWorker('spa', 1, {
+  // Si la creación falla, hay que soltar la promesa: al quedarse cacheada
+  // rechazada, la guarda de arriba impedía reintentar y el OCR quedaba roto
+  // hasta recargar la página.
+  const promesa = createWorker('spa', 1, {
     workerPath: '/tesseract-worker/worker.min.js',
     langPath: '/tessdata',
     corePath: '/tesseract-worker/tesseract-core.wasm.js',
     logger: () => {}, // silenciar logs en producción
   });
-  workerSingleton = await workerPromise;
+  workerPromise = promesa;
+  try {
+    workerSingleton = await promesa;
+  } catch (err) {
+    workerPromise = null;
+    throw err;
+  }
 }
 
 export function getTesseractWorker(): Worker | null {
@@ -89,7 +98,11 @@ export function useTesseract() {
 
       // Si el worker todavía no está listo, esperar
       if (!worker && workerPromise) {
-        worker = await workerPromise;
+        try {
+          worker = await workerPromise;
+        } catch {
+          workerPromise = null;   // permite el fallback on-demand de abajo
+        }
       }
 
       // Fallback: crear worker on-demand si el splash no lo precargó

@@ -111,3 +111,29 @@ export function borrarErrores(desde?: string, hasta?: string): number {
     .run(r.desde, r.hasta);
   return info.changes;
 }
+
+// Poda de mantenimiento. Sin ella la tabla crece indefinidamente dentro de la
+// base de datos de facturas: solo se vaciaba tras un envío manual con éxito,
+// que es justo lo que falla cuando el problema recurrente es el propio SMTP.
+const DIAS_RETENCION = 90;
+const MAX_FILAS = 5000;
+
+export function podarErrores(): number {
+  try {
+    const db = getDb();
+    const antiguos = db
+      .prepare(`DELETE FROM errores WHERE created_at < datetime('now', ?)`)
+      .run(`-${DIAS_RETENCION} days`).changes;
+    const excedente = db
+      .prepare(
+        `DELETE FROM errores WHERE id IN (
+           SELECT id FROM errores ORDER BY created_at DESC LIMIT -1 OFFSET ?
+         )`
+      )
+      .run(MAX_FILAS).changes;
+    return antiguos + excedente;
+  } catch (err) {
+    console.error('[Errores] No se pudo podar la tabla de errores:', err);
+    return 0;
+  }
+}

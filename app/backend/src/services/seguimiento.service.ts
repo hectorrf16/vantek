@@ -35,7 +35,8 @@
  *   · _convertirACliente deduplicates in JS (DNI/CIF exact, or phone exact + fuzzy
  *     name via Levenshtein); _normalizar strips accents/ordinals.
  *   · The obra is created at pendiente_presupuesto (reformas) or en_curso (taller).
- *   · Cancelling is only possible in ESTADOS_CANCELABLES; entregada requires a generated PDF.
+ *   · Cancelling is rejected in terminal states and requires a motivo once the obra started;
+ *     entregada requires a generated PDF.
  *   · _syncTrabajoDesdeEstado derives trabajo.estado (activo/completado/cancelado).
  * ──────────────────────────────────────────────────────────────────────────────
  */
@@ -109,12 +110,6 @@ export interface ActualizarSeguimientoDto extends Partial<CrearSeguimientoDto> {
   firma_entrada?: string;
   firma_salida?: string;
 }
-
-// Estados desde los que aún se puede cancelar: hasta que el presupuesto se
-// acepta (en_curso). A partir de en_curso la obra ya está iniciada.
-const ESTADOS_CANCELABLES: EstadoSeguimiento[] = [
-  'nuevo', 'contactado', 'visita_agendada', 'pendiente_presupuesto', 'a_la_espera',
-];
 
 // Estados en los que la obra ya está iniciada (presupuesto aceptado en adelante).
 // Cancelar desde aquí es posible pero exige un motivo, que queda registrado en
@@ -440,7 +435,7 @@ function _levenshtein(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  let fila = Array.from({ length: b.length + 1 }, (_, i) => i);
+  const fila = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
     let anterior = fila[0];
     fila[0] = i;

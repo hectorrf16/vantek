@@ -105,6 +105,23 @@ jobs:
           }
           Get-ChildItem $env:PUPPETEER_CACHE_DIR
 
+      - name: Provisionar assets de OCR
+        shell: pwsh
+        # .npmrc fija ignore-scripts=true, así que npm omite tanto el
+        # `postinstall` como el `prebuild` del frontend: sin este paso el ZIP se
+        # publica SIN el worker de Tesseract ni el modelo de idioma y el OCR no
+        # funciona en la instalación del cliente.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run setup:ocr --workspace=app/frontend
+          if ($LASTEXITCODE -ne 0) { throw "setup:ocr fallo (codigo $LASTEXITCODE)" }
+          foreach ($p in @(
+            'app/frontend/public/tesseract-worker/worker.min.js',
+            'app/frontend/public/tessdata/spa.traineddata.gz'
+          )) {
+            if (-not (Test-Path $p)) { throw "Falta el asset de OCR $p" }
+          }
+
       - name: Compilar frontend, backend y launcher
         shell: pwsh
         run: npm run build
@@ -216,7 +233,7 @@ jobs:
           Copy-Item 'version.json' "$rel\version.json"
           Copy-Item 'start.bat'    "$rel\start.bat"
           Copy-Item 'install.ps1'  "$rel\install.ps1"
-          Copy-Item 'install.ps1'  "$rel\README.md"
+          Copy-Item 'README.md'    "$rel\README.md"
           Copy-Tree '.puppeteer-cache' "$rel\puppeteer"
 
           # Verja final: el binario nativo de better-sqlite3 DEBE haber llegado al
@@ -243,12 +260,27 @@ jobs:
           $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
           Write-Host "Vantek-$v.zip generado: $size MB"
 
+      - name: Generar SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          # El launcher exige este fichero para verificar el ZIP antes de
+          # aplicarlo: sin él, rechaza la actualización.
+          $ErrorActionPreference = 'Stop'
+          $lineas = Get-ChildItem 'Vantek-*.zip' | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($_.Name)"
+          }
+          $lineas | Set-Content -Path 'SHA256SUMS.txt' -Encoding ascii
+          Get-Content 'SHA256SUMS.txt'
+
       - name: Subir artefacto de prueba (solo ejecuciones manuales)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v6
         with:
           name: Vantek-release
-          path: Vantek-*.zip
+          path: |
+            Vantek-*.zip
+            SHA256SUMS.txt
           retention-days: 7
 
       - name: Publicar release y subir asset
@@ -259,4 +291,6 @@ jobs:
           name: Vantek ${{ steps.version.outputs.version }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: Vantek-*.zip
+          files: |
+            Vantek-*.zip
+            SHA256SUMS.txt

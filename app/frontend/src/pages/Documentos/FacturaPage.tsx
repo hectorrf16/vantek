@@ -136,10 +136,16 @@ export default function FacturaPage() {
   }, [actual?.id]); // solo cuando cambia el documento, no en cada render
 
   // Arrancar autosave si está en borrador
+  const lineasRef = useRef(lineas);
+  useEffect(() => { lineasRef.current = lineas; });   // sin deps: cada render
+
   useEffect(() => {
     if (!actual || !id || actual.estado !== 'borrador') return;
+    // Se leen las líneas VIVAS desde la ref: el intervalo capturaba las del
+    // render en que se montó el efecto, así que el borrador se autoguardaba
+    // siempre con las líneas originales y nunca con las ediciones del usuario.
     autosaveTimer.current = setInterval(() => {
-      guardarBorrador(id, { lineas });
+      guardarBorrador(id, { lineas: lineasRef.current });
     }, AUTOSAVE_MS);
     return () => { if (autosaveTimer.current) clearInterval(autosaveTimer.current); };
   }, [actual?.id, actual?.estado]);
@@ -244,12 +250,8 @@ export default function FacturaPage() {
 
   async function handleEliminar() {
     if (!actual) return;
-    try {
-      await eliminar(actual.id);
-      navigate(-1);
-    } catch (e: any) {
-      console.error('Error al eliminar factura:', e);
-    }
+    await eliminar(actual.id);   // el interceptor de axios ya avisa del error
+    navigate(-1);
   }
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -340,7 +342,7 @@ export default function FacturaPage() {
             iva_porcentaje={actual.iva_porcentaje}
             readonly={readonly}
             onAbrirAlbaran={readonly ? undefined : () => setShowModalAlbaran(true)}
-            anticipoTotal={actual.anticipo_total}
+            anticipoTotal={actual.anticipo_aplicado ?? actual.anticipo_total}
           />
         </div>
       </div>
@@ -350,7 +352,9 @@ export default function FacturaPage() {
       {showModalAlbaran && (
         <ModalAñadirAlbaran
           trabajoId={actual.trabajo_id}
-          margenTrabajo={appConfig?.documentos.margen_defecto ?? 10}
+          margenTrabajo={
+            actual.trabajo_margen ?? appConfig?.documentos.margen_defecto ?? 20
+          }
           lineasYaUsadas={lineasYaUsadas}
           onConfirm={handleLineasAlbaran}
           onClose={() => setShowModalAlbaran(false)}

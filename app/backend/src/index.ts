@@ -50,14 +50,19 @@ import path from 'path';
 import fs from 'fs';
 import asyncHandler from 'express-async-handler';
 import { runMigrations } from '@db/migrate';
+import { backupDb } from '@db/backup';
+import { getDb, closeDb } from '@db/connection';
 import { migrateConfig } from '@utils/config';
 import { errorHandler, notFoundHandler } from '@middleware/errorHandler';
+import { requireAuth } from '@middleware/auth';
+import authRouter from '@routes/auth.router';
 import clientesRouter from '@routes/clientes.router';
 import albanesRouter from '@routes/albaranes.router';
 import setupRouter from '@routes/setup.router';
 import presupuestosRouter from '@routes/presupuestos.router';
 import facturasRouter from '@routes/facturas.router';
 import { hayBorradorSucio } from '@services/facturas.service';
+import { podarErrores } from '@services/errores.service';
 import dashboardRouter from '@routes/dashboard.router';
 import configRouter from '@routes/config.router';
 import seguimientoRouter from './routes/seguimiento.router';
@@ -68,8 +73,25 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: 'http://localhost:5173' }));
+app.use(
+  helmet({
+    // CSP restrictiva: el SPA solo carga recursos propios. 'unsafe-inline' en
+    // estilos es necesario porque la UI usa style={{…}} en línea.
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'wasm-unsafe-eval'"],   // tesseract.js (WASM)
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        connectSrc: ["'self'"],
+        workerSrc: ["'self'", 'blob:'],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+  })
+);
+app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
 app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -90,13 +112,26 @@ app.use((req, res, next) => {
 
 // ─── Estáticos (producción) ───────────────────────────────────────────────────
 // En Windows/Node portable, Express sirve el frontend compilado por Vite
-// (app/frontend/dist). En Docker el frontend lo sirve nginx, por lo que esta
-// ruta no se usa (las rutas no-/api nunca llegan a Express tras el proxy).
-const FRONTEND_DIST = path.join(APP_ROOT, 'app', 'frontend', 'dist');
+// (app/frontend/dist). En Docker la imagen lo deja en <APP_ROOT>/public y el
+// servidor habitual es nginx; se resuelve por candidatos para que el fallback
+// de Express funcione en ambos despliegues.
+const FRONTEND_DIST =
+  [
+    path.join(APP_ROOT, 'app', 'frontend', 'dist'),
+    path.join(APP_ROOT, 'public'),
+  ].find(p => fs.existsSync(path.join(p, 'index.html'))) ??
+  path.join(APP_ROOT, 'app', 'frontend', 'dist');
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(FRONTEND_DIST));
 }
-app.use('/pdfs', express.static(PDFS_DIR));
+app.use('/pdfs', requireAuth, express.static(PDFS_DIR));
+
+// ─── Acceso ────────────────────────────────────────────────────────────────
+// Mientras no haya contraseña configurada, requireAuth deja pasar todo (modo
+// LAN de siempre). En cuanto se configura desde Configuración → Sistema, cada
+// endpoint — incluido el borrado total de datos — exige sesión.
+app.use('/api/auth', authRouter);
+app.use('/api', requireAuth);
 
 // ─── Config endpoints ─────────────────────────────────────────────────────────
 app.use('/api/config', configRouter);
@@ -134,7 +169,9 @@ function readUpdateState(): any {
  
 function writeUpdateState(partial: object): void {
   const current = readUpdateState();
-  fs.writeFileSync(UPDATE_STATE_PATH, JSON.stringify({ ...current, ...partial }, null, 2));
+  const tmp = `${UPDATE_STATE_PATH}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ ...current, ...partial }, null, 2));
+  fs.renameSync(tmp, UPDATE_STATE_PATH);
 }
  
 // GET /api/status/update
@@ -175,15 +212,51 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // ─── Arranque ─────────────────────────────────────────────────────────────────
+const UN_DIA_MS = 24 * 60 * 60 * 1000;
+
 function start() {
   try {
     console.log('[Vantek] Iniciando...');
-    migrateConfig();           // ← añadir esta línea
+    migrateConfig();
     runMigrations();
     console.log('[Vantek] Base de datos lista.');
-    app.listen(PORT, () => {
+
+    // Copia de seguridad diaria (y una al arrancar): vantek.db es el único
+    // almacén de todas las facturas y no había ningún respaldo automático.
+    backupDb('arranque');
+    podarErrores();
+    const backupTimer = setInterval(() => {
+      backupDb('diario');
+      podarErrores();
+    }, UN_DIA_MS);
+    backupTimer.unref();
+
+    const server = app.listen(PORT, () => {
       console.log(`[Vantek] Servidor en http://localhost:${PORT}`);
     });
+
+    // Apagado ordenado. En Docker el proceso es PID 1 y `docker stop` acababa
+    // siempre en SIGKILL con el WAL abierto; aquí cerramos y hacemos
+    // checkpoint para que la copia del fichero .db esté siempre al día.
+    let cerrando = false;
+    const apagar = (senal: string) => {
+      if (cerrando) return;
+      cerrando = true;
+      console.log(`[Vantek] ${senal} recibido, cerrando...`);
+      server.close(() => {
+        try {
+          getDb().pragma('wal_checkpoint(TRUNCATE)');
+          closeDb();
+        } catch (err) {
+          console.error('[Vantek] Error cerrando la base de datos:', err);
+        }
+        process.exit(0);
+      });
+      // Red de seguridad si alguna conexión se queda abierta.
+      setTimeout(() => process.exit(0), 8000).unref();
+    };
+    process.on('SIGTERM', () => apagar('SIGTERM'));
+    process.on('SIGINT', () => apagar('SIGINT'));
   } catch (err) {
     console.error('[Vantek] Error al iniciar:', err);
     process.exit(1);

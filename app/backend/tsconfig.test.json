@@ -1,0 +1,17 @@
+{
+  // Los tests quedan fuera de tsconfig.json (rootDir ./src) para no acabar en
+  // dist/, así que sin este proyecto sus errores de tipos pasaban inadvertidos:
+  // vitest transpila sin comprobar tipos.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    // Vitest carga los tests como ESM (import.meta, top-level await); el
+    // proyecto principal compila a CommonJS para producción.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

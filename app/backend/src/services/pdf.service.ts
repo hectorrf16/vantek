@@ -37,7 +37,7 @@ import puppeteer from 'puppeteer';
 import path from 'path';
 import fs from 'fs';
 import { getAppConfig, getProfileConfig, AppConfig } from '@utils/config';
-import { APP_ROOT, PDFS_DIR } from '@utils/paths';
+import { APP_ROOT, CONFIG_DIR, PDFS_DIR } from '@utils/paths';
 
 // ─── Tipos mínimos que necesita el template ───────────────────────────────────
 
@@ -67,6 +67,7 @@ interface DocumentoParaPdf {
     total: number;
   };
   anticipo_total?: number;
+  anticipo_aplicado?: number;
   restante?: number;
 }
 
@@ -78,6 +79,20 @@ function dirPdfs(): string {
   const dir = PDFS_DIR;
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/**
+ * Borra del disco el PDF de una versión purgada. Al podar versiones solo se
+ * borraban las filas de la BD, así que data/pdfs crecía sin límite.
+ * Acepta valores antiguos con ruta relativa: se queda con el nombre de fichero.
+ */
+export function eliminarPdf(pdfPath: string | null | undefined): void {
+  if (!pdfPath) return;
+  try {
+    fs.unlinkSync(path.join(PDFS_DIR, path.basename(pdfPath.replace(/\\/g, '/'))));
+  } catch {
+    /* ya no existe o está en uso: no es un fallo de negocio */
+  }
 }
 
 // ─── Formateo ─────────────────────────────────────────────────────────────────
@@ -111,27 +126,46 @@ function esc(valor: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
+// ─── Rutas de fichero permitidas ─────────────────────────────────────────────
+// El logo y la plantilla externa salen de la configuración, que se escribe por
+// API. Sin confinar la ruta, cualquiera podía apuntar a un fichero cualquiera
+// del disco (la propia config con la contraseña SMTP, la BD…) y volcarlo en el
+// PDF generado. Se admiten solo rutas dentro de config/ o templates/.
+function rutaPermitida(valor: string): string | null {
+  const bases = [
+    path.resolve(CONFIG_DIR),
+    path.resolve(APP_ROOT, 'templates'),
+  ];
+  const abs = path.isAbsolute(valor)
+    ? path.resolve(valor)
+    : path.resolve(CONFIG_DIR, valor);
+  const permitida = bases.some(b => abs === b || abs.startsWith(b + path.sep));
+  return permitida && fs.existsSync(abs) ? abs : null;
+}
+
 // ─── Logo ─────────────────────────────────────────────────────────────────────
 
 // Devuelve un src usable en <img> para el logo de la empresa. Acepta un data URI
-// (lo más habitual, subido desde Configuración) o una ruta de fichero en disco,
-// que se lee y se convierte a data URI. Devuelve cadena vacía si no hay logo.
+// (lo más habitual, subido desde Configuración) o una ruta de fichero dentro de
+// config/, que se lee y se convierte a data URI. Cadena vacía si no hay logo.
 function logoSrc(valor?: string | null): string {
   if (!valor) return '';
   const v = valor.trim();
   if (!v) return '';
   if (v.startsWith('data:')) return v;
   try {
-    if (!fs.existsSync(v)) return '';
-    const buf = fs.readFileSync(v);
-    const ext = path.extname(v).toLowerCase();
+    const ruta = rutaPermitida(v);
+    if (!ruta) return '';
+    const buf = fs.readFileSync(ruta);
+    const ext = path.extname(ruta).toLowerCase();
     const mime =
       ext === '.png' ? 'image/png'
       : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
       : ext === '.gif' ? 'image/gif'
       : ext === '.svg' ? 'image/svg+xml'
       : ext === '.webp' ? 'image/webp'
-      : 'application/octet-stream';
+      : '';
+    if (!mime) return '';   // solo imágenes
     return `data:${mime};base64,${buf.toString('base64')}`;
   } catch {
     return '';
@@ -178,11 +212,9 @@ function cargarPlantilla(): string {
   }
 
   if (docs.template_path && docs.template_path.trim()) {
-    const ruta = path.isAbsolute(docs.template_path)
-      ? docs.template_path
-      : path.join(APP_ROOT, docs.template_path);
     try {
-      if (fs.existsSync(ruta)) return fs.readFileSync(ruta, 'utf-8');
+      const ruta = rutaPermitida(docs.template_path);
+      if (ruta) return fs.readFileSync(ruta, 'utf-8');
     } catch {
       /* cae a la plantilla incluida */
     }
@@ -349,8 +381,10 @@ function construirContexto(doc: DocumentoParaPdf, tipo: TipoDocumento): Contexto
     mostrar_nota_iva: tipo === 'presupuesto',
 
     // Anticipos entregados y restante a pagar (solo facturas con anticipos).
-    mostrar_anticipo: esFactura && (doc.anticipo_total ?? 0) > 0,
-    anticipo_total: `-${fmt(doc.anticipo_total ?? 0)} €`,
+    // Solo el anticipo IMPUTADO a esta factura: el total de la obra se reparte
+    // entre sus facturas para no descontarlo entero en todas.
+    mostrar_anticipo: esFactura && (doc.anticipo_aplicado ?? doc.anticipo_total ?? 0) > 0,
+    anticipo_total: `-${fmt(doc.anticipo_aplicado ?? doc.anticipo_total ?? 0)} €`,
     restante: `${fmt(doc.restante ?? doc.totales.total)} €`,
 
     notas: doc.notas ?? '',
@@ -380,7 +414,11 @@ function encontrarEdge(): string | undefined {
 }
 
 async function lanzarNavegador() {
-  const baseArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
+  // El sandbox de Chromium solo se desactiva en Linux/contenedor, donde el
+  // proceso ya corre sin privilegios y el sandbox de espacios de nombres no
+  // está disponible. En Windows se mantiene activo.
+  const baseArgs =
+    process.platform === 'linux' ? ['--no-sandbox', '--disable-setuid-sandbox'] : [];
 
   const lanzarBundled = () =>
     puppeteer.launch({ headless: true, args: baseArgs });
@@ -440,5 +478,8 @@ export async function generarPdf(
     await browser.close();
   }
 
-  return path.relative(__dirname, outputPath);
+  // Se guarda SOLO el nombre del fichero: una ruta relativa al módulo compilado
+  // cambiaba entre dev/producción y entre Windows y Docker (separadores
+  // distintos), y la BD dejaba de ser portable entre despliegues.
+  return nombre;
 }

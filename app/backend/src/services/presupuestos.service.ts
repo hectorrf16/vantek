@@ -42,6 +42,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '@db/connection';
 import { getAppConfig } from '@utils/config';
+import { totalesDocumento } from '@utils/dinero';
+import { hoyISO } from '@utils/fechas';
+import { eliminarPdf } from '@services/pdf.service';
 import { syncSeguimientoDesdeDocumento } from './seguimiento.service';
 
 // ─── Tipos internos ───────────────────────────────────────────────────────────
@@ -84,11 +87,8 @@ export interface PresupuestoRow {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function calcularTotales(lineas: LineaPresupuesto[]) {
-  const subtotal = lineas.reduce(
-    (acc, l) => acc + l.precio_unitario * l.cantidad,
-    0
-  );
   // Los presupuestos no llevan IVA en el total (según spec)
+  const { subtotal } = totalesDocumento(lineas, 0);
   return { subtotal, total: subtotal };
 }
 
@@ -201,7 +201,7 @@ export async function crearPresupuesto(data: {
   const db = getDb();
   const config = getAppConfig();
   const id = uuidv4();
-  const fecha = data.fecha ?? new Date().toISOString().slice(0, 10);
+  const fecha = data.fecha ?? hoyISO();
   const iva = config.documentos?.iva_porcentaje ?? 21;
 
   const resultado = db.transaction(() => {
@@ -263,10 +263,6 @@ export async function guardarLineas(
 ) {
   const db = getDb();
 
-  db.prepare('DELETE FROM presupuesto_lineas WHERE presupuesto_id = ?').run(
-    presupuesto_id
-  );
-
   const stmt = db.prepare(
     `INSERT INTO presupuesto_lineas
      (id, presupuesto_id, descripcion, detalle, cantidad, unidad,
@@ -274,17 +270,23 @@ export async function guardarLineas(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
-  lineas.forEach((l, idx) => {
-    stmt.run(
-      uuidv4(), presupuesto_id, l.descripcion, l.detalle ?? null, l.cantidad, l.unidad ?? null,
-      l.precio_unitario, l.coste_unitario ?? null,
-      l.margen_porcentaje ?? null, l.tipo, idx
+  // Transacción: sin ella, un INSERT fallido a mitad dejaba el presupuesto sin
+  // ninguna línea (el DELETE previo ya se había confirmado).
+  db.transaction(() => {
+    db.prepare('DELETE FROM presupuesto_lineas WHERE presupuesto_id = ?').run(
+      presupuesto_id
     );
-  });
-
-  db.prepare(
-    `UPDATE presupuestos SET updated_at = datetime('now') WHERE id = ?`
-  ).run(presupuesto_id);
+    lineas.forEach((l, idx) => {
+      stmt.run(
+        uuidv4(), presupuesto_id, l.descripcion, l.detalle ?? null, l.cantidad, l.unidad ?? null,
+        l.precio_unitario, l.coste_unitario ?? null,
+        l.margen_porcentaje ?? null, l.tipo, idx
+      );
+    });
+    db.prepare(
+      `UPDATE presupuestos SET updated_at = datetime('now') WHERE id = ?`
+    ).run(presupuesto_id);
+  })();
 }
 
 // ─── Autoguardado de borrador ─────────────────────────────────────────────────
@@ -383,16 +385,16 @@ export async function guardarVersion(
   // Purgar versiones antiguas si se supera el límite
   const versiones = db
     .prepare(
-      `SELECT id FROM presupuesto_versiones
+      `SELECT id, pdf_path FROM presupuesto_versiones
        WHERE presupuesto_id = ?
        ORDER BY numero_version ASC`
     )
-    .all(presupuesto_id) as { id: string }[];
+    .all(presupuesto_id) as { id: string; pdf_path: string | null }[];
 
   if (versiones.length > maxVersiones) {
     const aBorrar = versiones.slice(0, versiones.length - maxVersiones);
     const stmtDel = db.prepare('DELETE FROM presupuesto_versiones WHERE id = ?');
-    aBorrar.forEach(v => stmtDel.run(v.id));
+    aBorrar.forEach(v => { eliminarPdf(v.pdf_path); stmtDel.run(v.id); });
   }
 
   return numero_version;
@@ -402,9 +404,35 @@ export async function guardarVersion(
 
 export async function eliminarPresupuesto(id: string) {
   const db = getDb();
-  db.prepare('DELETE FROM presupuesto_lineas WHERE presupuesto_id = ?').run(id);
-  db.prepare('DELETE FROM presupuesto_versiones WHERE presupuesto_id = ?').run(id);
-  db.prepare('DELETE FROM presupuestos WHERE id = ?').run(id);
+
+  // facturas.presupuesto_origen_id referencia esta fila sin ON DELETE: borrar
+  // sin comprobarlo lanzaba SQLITE_CONSTRAINT (un 500 opaco) después de haber
+  // borrado ya líneas y versiones.
+  const usos = db
+    .prepare(
+      `SELECT COUNT(*) AS cnt FROM facturas
+       WHERE presupuesto_origen_id = ? OR presupuesto_id = ?`
+    )
+    .get(id, id) as { cnt: number };
+  if (usos.cnt > 0) {
+    const e = new Error(
+      'El presupuesto ha generado una factura: elimina antes la factura.'
+    ) as Error & { statusCode?: number };
+    e.statusCode = 409;
+    throw e;
+  }
+
+  const pdfs = db
+    .prepare('SELECT pdf_path FROM presupuesto_versiones WHERE presupuesto_id = ?')
+    .all(id) as { pdf_path: string | null }[];
+
+  db.transaction(() => {
+    db.prepare('DELETE FROM presupuesto_lineas WHERE presupuesto_id = ?').run(id);
+    db.prepare('DELETE FROM presupuesto_versiones WHERE presupuesto_id = ?').run(id);
+    db.prepare('DELETE FROM presupuestos WHERE id = ?').run(id);
+  })();
+
+  pdfs.forEach(v => eliminarPdf(v.pdf_path));
 }
 
 // ─── Importar líneas desde presupuesto (para crear factura) ──────────────────

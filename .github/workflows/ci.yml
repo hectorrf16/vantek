@@ -66,6 +66,56 @@ jobs:
       - name: Comprobar tipos (backend)
         run: npx tsc --noEmit -p app/backend/tsconfig.json
 
+      - name: Comprobar tipos (tests del backend)
+        run: npx tsc --noEmit -p app/backend/tsconfig.test.json
+
+      - name: Comprobar tipos (frontend)
+        run: npx tsc --noEmit -p app/frontend/tsconfig.json
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Ejecutar tests (backend + frontend)
+        run: npm test
+
+  # El producto se despliega en Windows pero solo se probaba en Ubuntu. Este job
+  # ejecuta los mismos tests sobre el SO de destino y su resolución nativa de
+  # dependencias (better-sqlite3 compilado con MSVC).
+  test-windows:
+    name: Tipos y tests (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configurar Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      # npm install (no ci): el lock se genera en Linux y no registra los
+      # bindings nativos win32 de rolldown/vite (npm/cli#4828).
+      - name: Instalar dependencias
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --workspaces --include-workspace-root --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw "npm install fallo (codigo $LASTEXITCODE)" }
+
+      - name: Compilar better-sqlite3 desde fuente
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run build-release --prefix node_modules/better-sqlite3
+          if (-not (Test-Path 'node_modules/better-sqlite3/build/Release/better_sqlite3.node')) {
+            throw "better-sqlite3 no compilo el binding nativo"
+          }
+
+      - name: Comprobar tipos (backend)
+        run: npx tsc --noEmit -p app/backend/tsconfig.json
+
       - name: Comprobar tipos (frontend)
         run: npx tsc --noEmit -p app/frontend/tsconfig.json
 

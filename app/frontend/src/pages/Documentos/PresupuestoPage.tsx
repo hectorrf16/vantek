@@ -104,10 +104,16 @@ export default function PresupuestoPage() {
     setEmailDestino(actual.cliente_email ?? '');
   }, [actual?.id]);
 
+  // Se leen las líneas VIVAS desde la ref: el intervalo capturaba las del render
+  // en que se montó el efecto, así que el borrador se autoguardaba siempre con
+  // las líneas originales y nunca con las ediciones del usuario.
+  const lineasRef = useRef(lineas);
+  useEffect(() => { lineasRef.current = lineas; });   // sin deps: cada render
+
   useEffect(() => {
     if (!actual || !id || actual.estado !== 'borrador') return;
     autosaveTimer.current = setInterval(() => {
-      guardarBorrador(id, { lineas });
+      guardarBorrador(id, { lineas: lineasRef.current });
     }, AUTOSAVE_MS);
     return () => { if (autosaveTimer.current) clearInterval(autosaveTimer.current); };
   }, [actual?.id, actual?.estado]);

@@ -43,6 +43,7 @@
 
 import { useState, useCallback } from 'react';
 import { useConfigStore } from '@store/config.store';
+import { redondear, totalesDocumento } from '@utils/dinero';
 import Modal from '@ui/Modal';
 
 export type LineaEditor = {
@@ -113,7 +114,7 @@ function ModalItemManual({ margenDefecto, onConfirm, onClose }: ModalItemManualP
       detalle: detalle.trim() || null,
       cantidad: Number(cantidad) || 1,
       unidad,
-      precio_unitario: Number(precio.toFixed(2)),
+      precio_unitario: redondear(precio),
       coste_unitario: coste ? Number(coste) : null,
       margen_porcentaje: coste ? Number(margen) : null,
       tipo,
@@ -265,7 +266,7 @@ export default function DocumentoEditor({
       if ('coste_unitario' in campo || 'margen_porcentaje' in campo) {
         const coste = updated.coste_unitario ?? 0;
         const margen = updated.margen_porcentaje ?? 0;
-        updated.precio_unitario = Number((coste * (1 + margen / 100)).toFixed(2));
+        updated.precio_unitario = redondear(coste * (1 + margen / 100));
       }
       return updated;
     }));
@@ -294,9 +295,10 @@ export default function DocumentoEditor({
 
   // ─── Totales ────────────────────────────────────────────────────────────────
 
-  const subtotal = lineas.reduce((acc, l) => acc + l.precio_unitario * l.cantidad, 0);
-  const iva = tipo === 'factura' ? subtotal * (iva_porcentaje / 100) : 0;
-  const total = subtotal + iva;
+  const totales = totalesDocumento(lineas, tipo === 'factura' ? iva_porcentaje : 0);
+  const subtotal = totales.subtotal;
+  const iva = totales.iva;
+  const total = totales.total;
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -320,7 +322,7 @@ export default function DocumentoEditor({
             {lineas.length === 0 && (
               <tr>
                 <td
-                  colSpan={readonly ? 5 : 6}
+                  colSpan={readonly ? 6 : 7}
                   style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}
                 >
                   Sin líneas. Añade ítems con los botones de abajo.
@@ -409,7 +411,9 @@ export default function DocumentoEditor({
                         type="number" min="0" step="0.01"
                         value={l.coste_unitario ?? ''}
                         onChange={e => actualizarLinea(l._key, {
-                          coste_unitario: Number(e.target.value) || null,
+                          // Con `Number(v) || null` un 0 legítimo se convertía en
+                          // null y no podía introducirse un coste cero.
+                          coste_unitario: e.target.value === '' ? null : Number(e.target.value),
                         })}
                         onClick={e => e.stopPropagation()}
                       />
@@ -424,7 +428,7 @@ export default function DocumentoEditor({
                         type="number" min="0" step="1"
                         value={l.margen_porcentaje ?? ''}
                         onChange={e => actualizarLinea(l._key, {
-                          margen_porcentaje: Number(e.target.value) || null,
+                          margen_porcentaje: e.target.value === '' ? null : Number(e.target.value),
                         })}
                         onClick={e => e.stopPropagation()}
                       />

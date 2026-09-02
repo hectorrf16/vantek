@@ -76,9 +76,9 @@ function parsearTextoAlbaran(texto: string, confianzaGlobal: number): ResultadoO
 
   // Extracción heurística básica — el usuario siempre revisa
   const proveedor = lineas[0] ?? '';
-  const fechaMatch = texto.match(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/);
+  const fechaMatch = texto.match(/\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/);
   const fecha = fechaMatch ? fechaMatch[1] : '';
-  const numMatch = texto.match(/(?:albarán|albaran|nº|no\.?|num\.?)\s*[:.]?\s*([A-Z0-9\-\/]+)/i);
+  const numMatch = texto.match(/(?:albarán|albaran|nº|no\.?|num\.?)\s*[:.]?\s*([A-Z0-9\-/]+)/i);
   const numero_albaran = numMatch ? numMatch[1] : '';
 
   // Líneas con precio: detectar patrón "descripción ... cantidad ... precio"

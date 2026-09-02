@@ -4,7 +4,7 @@
 #
 # WHAT IT DOES
 #   Run once by the technician as Administrator on the client PC. Since this
-#   script ships INSIDE Vantek-release.zip, it first reuses the app files sitting
+#   script ships INSIDE Vantek-*.zip, it first reuses the app files sitting
 #   next to it (no redundant GitHub re-download); it only downloads the release
 #   from GitHub when run standalone. Provisions portable Node.js and NSSM locally
 #   (nothing installed system-wide), and registers the "VANTEK" Windows service
@@ -41,15 +41,15 @@
     global en el sistema:
 
       1. Reutiliza los ficheros de la app que viajan junto a este script dentro
-         de Vantek-release.zip (copiandolos al directorio de instalacion). Solo
+         de Vantek-<version>.zip (copiandolos al directorio de instalacion). Solo
          descarga el release desde GitHub si el script se ejecuta suelto.
-      2. Descarga Node.js 22 portable (win-x64) en <instalacion>\node.
+      2. Descarga Node.js 24 portable (win-x64) en <instalacion>\node.
       3. Descarga NSSM en <instalacion>\tools\nssm.exe.
       4. Ejecuta launcher\install-service.bat, que registra el servicio de
          Windows "VANTEK" apuntando al launcher con el Node portable.
 
     A partir de aqui el launcher se encarga de las actualizaciones descargando
-    el mismo Vantek-release.zip de cada nueva release. node\ y tools\ NO viajan
+    el mismo Vantek-*.zip de cada nueva release. node\ y tools\ NO viajan
     en las actualizaciones: se aportan aqui una unica vez y sobreviven a los
     updates (Expand-Archive solo sobreescribe lo que trae el ZIP).
 
@@ -223,7 +223,7 @@ try {
     }
 
     # ─── 3. Obtener la aplicacion (local si existe, si no desde GitHub) ─────────
-    # install.ps1 viaja DENTRO de Vantek-release.zip. Si el tecnico ya ha
+    # install.ps1 viaja DENTRO de Vantek-<version>.zip. Si el tecnico ya ha
     # descargado y extraido el release para ejecutar este script, los ficheros
     # de la app estan justo al lado: los copiamos y NOS AHORRAMOS la descarga y
     # la descompresion del mismo ZIP desde GitHub. Solo se descarga si el script
@@ -254,8 +254,8 @@ try {
         }
         Write-Info "Release: $($release.tag_name)"
 
-        $zipPath = Join-Path $tmp 'Vantek-release.zip'
-        Write-Info 'Descargando Vantek-release.zip...'
+        $zipPath = Join-Path $tmp $asset.name
+        Write-Info "Descargando $($asset.name)..."
         Get-File -Uri $asset.browser_download_url -Headers $ghHeaders -OutFile $zipPath
 
         Write-Info "Extrayendo en $InstallDir ..."
@@ -328,7 +328,7 @@ try {
     Write-Host '   Instalacion completada.'                            -ForegroundColor Green
     Write-Host '=================================================='    -ForegroundColor Green
     Write-Info 'El servicio VANTEK queda arrancado y se iniciara automaticamente con Windows.'
-    Write-Info 'Abre la aplicacion en: http://localhost'
+    Write-Info 'Abre la aplicacion en: http://localhost:3000'
     Write-Info 'La primera vez, la propia aplicacion mostrara el asistente de configuracion.'
 }
 finally {

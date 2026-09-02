@@ -44,6 +44,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '@db/connection';
 import { getAppConfig } from '@utils/config';
+import { redondear, totalesDocumento } from '@utils/dinero';
+import { hoyISO } from '@utils/fechas';
+import { eliminarPdf } from '@services/pdf.service';
 import { exportarLineasParaFactura } from '@services/presupuestos.service';
 import { syncSeguimientoDesdeDocumento } from './seguimiento.service';
 
@@ -92,24 +95,44 @@ export interface FacturaRow {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function calcularTotales(lineas: LineaFactura[], iva_porcentaje: number) {
-  const subtotal = lineas.reduce(
-    (acc, l) => acc + l.precio_unitario * l.cantidad,
-    0
-  );
-  const iva = subtotal * (iva_porcentaje / 100);
-  const total = subtotal + iva;
+  const { subtotal, iva, total } = totalesDocumento(lineas, iva_porcentaje);
   return { subtotal, iva, iva_porcentaje, total };
 }
 
+// Una factura emitida (con número asignado) es un documento legal: ni sus
+// líneas ni su existencia pueden modificarse por API. Para corregirla hay que
+// reabrirla explícitamente (pierde el número) o emitir una rectificativa.
+function exigirBorrador(id: string, accion: string): void {
+  const db = getDb();
+  const fila = db
+    .prepare('SELECT estado FROM facturas WHERE id = ?')
+    .get(id) as { estado: EstadoFactura } | undefined;
+  if (!fila) {
+    const e = new Error('Factura no encontrada') as Error & { statusCode?: number };
+    e.statusCode = 404;
+    throw e;
+  }
+  if (fila.estado !== 'borrador') {
+    const e = new Error(
+      `La factura ya está emitida (${fila.estado}): no se puede ${accion}. Reábrela como borrador si necesitas corregirla.`
+    ) as Error & { statusCode?: number };
+    e.statusCode = 409;
+    throw e;
+  }
+}
+
+// El siguiente número sale del MÁXIMO de la serie del año, nunca de un COUNT:
+// reabrir o borrar una factura cerrada reducía el conteo y el siguiente cierre
+// reemitía un número ya usado. El índice único de la migración v10 lo blinda.
 async function siguienteNumeroFactura(anio: number): Promise<string> {
   const db = getDb();
   const row = db
     .prepare(
-      `SELECT COUNT(*) AS cnt FROM facturas
-       WHERE anio_numero = ? AND estado != 'borrador'`
+      `SELECT MAX(CAST(numero AS INTEGER)) AS maxn FROM facturas
+       WHERE anio_numero = ? AND numero IS NOT NULL`
     )
-    .get(anio) as { cnt: number };
-  const siguiente = row.cnt + 1;
+    .get(anio) as { maxn: number | null };
+  const siguiente = (row.maxn ?? 0) + 1;
   return String(siguiente).padStart(4, '0');
 }
 
@@ -210,8 +233,13 @@ export async function obtenerFactura(id: string) {
       `SELECT COALESCE(SUM(importe), 0) AS total FROM obra_pagos WHERE trabajo_id = ?`
     )
     .get(factura.trabajo_id) as { total: number };
-  const anticipo_total = anticipoRow.total;
-  const restante = totales.total - anticipo_total;
+  const anticipo_total = redondear(anticipoRow.total);
+  const anticipo_aplicado = anticipoAplicadoAFactura(
+    factura.trabajo_id,
+    id,
+    anticipo_total
+  );
+  const restante = redondear(totales.total - anticipo_aplicado);
 
   return {
     ...factura,
@@ -219,8 +247,44 @@ export async function obtenerFactura(id: string) {
     versiones,
     totales,
     anticipo_total,
+    anticipo_aplicado,
     restante,
   };
+}
+
+// Los anticipos son de la OBRA, no de una factura. Si la obra tiene varias
+// facturas, el anticipo se consume por orden de creación: antes se restaba
+// entero en todas, infravalorando el importe pendiente de cada una.
+function anticipoAplicadoAFactura(
+  trabajoId: string,
+  facturaId: string,
+  anticipoTotal: number
+): number {
+  if (anticipoTotal <= 0) return 0;
+  const db = getDb();
+
+  const facturas = db
+    .prepare(
+      `SELECT f.id, f.iva_porcentaje,
+        (SELECT COALESCE(SUM(fl.precio_unitario * fl.cantidad), 0)
+         FROM factura_lineas fl WHERE fl.factura_id = f.id) AS subtotal
+       FROM facturas f
+       WHERE f.trabajo_id = ?
+       ORDER BY f.created_at ASC, f.rowid ASC`
+    )
+    .all(trabajoId) as { id: string; iva_porcentaje: number; subtotal: number }[];
+
+  let disponible = anticipoTotal;
+  for (const f of facturas) {
+    const total = redondear(
+      redondear(f.subtotal) * (1 + (f.iva_porcentaje ?? 0) / 100)
+    );
+    const aplicado = redondear(Math.min(disponible, total));
+    if (f.id === facturaId) return aplicado;
+    disponible = redondear(disponible - aplicado);
+    if (disponible <= 0) break;
+  }
+  return 0;
 }
 
 // ─── Crear ────────────────────────────────────────────────────────────────────
@@ -235,7 +299,7 @@ export async function crearFactura(data: {
   const db = getDb();
   const config = getAppConfig();
   const id = uuidv4();
-  const fecha = data.fecha ?? new Date().toISOString().slice(0, 10);
+  const fecha = data.fecha ?? hoyISO();
   const iva = config.documentos?.iva_porcentaje ?? 21;
 
  // Resolver líneas ANTES de la transacción (puede ser async)
@@ -284,8 +348,7 @@ export async function guardarLineas(
   lineas: Omit<LineaFactura, 'id' | 'factura_id' | 'orden'>[]
 ) {
   const db = getDb();
-
-  db.prepare('DELETE FROM factura_lineas WHERE factura_id = ?').run(factura_id);
+  exigirBorrador(factura_id, 'editar sus líneas');
 
   const stmt = db.prepare(
     `INSERT INTO factura_lineas
@@ -293,18 +356,23 @@ export async function guardarLineas(
       coste_unitario, margen_porcentaje, tipo, es_libre, albaran_linea_id, orden)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
-  lineas.forEach((l, idx) => {
-    stmt.run(
-      uuidv4(), factura_id, l.descripcion, l.detalle ?? null, l.cantidad, l.unidad ?? null,
-      l.precio_unitario, l.coste_unitario ?? null,
-      l.margen_porcentaje ?? null, l.tipo,
-      l.es_libre ? 1 : 0, l.albaran_linea_id ?? null, idx
-    );
-  });
 
-  db.prepare(
-    `UPDATE facturas SET updated_at = datetime('now') WHERE id = ?`
-  ).run(factura_id);
+  // Transacción: sin ella, un INSERT fallido a mitad dejaba la factura sin
+  // ninguna línea (el DELETE previo ya se había confirmado).
+  db.transaction(() => {
+    db.prepare('DELETE FROM factura_lineas WHERE factura_id = ?').run(factura_id);
+    lineas.forEach((l, idx) => {
+      stmt.run(
+        uuidv4(), factura_id, l.descripcion, l.detalle ?? null, l.cantidad, l.unidad ?? null,
+        l.precio_unitario, l.coste_unitario ?? null,
+        l.margen_porcentaje ?? null, l.tipo,
+        l.es_libre ? 1 : 0, l.albaran_linea_id ?? null, idx
+      );
+    });
+    db.prepare(
+      `UPDATE facturas SET updated_at = datetime('now') WHERE id = ?`
+    ).run(factura_id);
+  })();
 }
 
 // ─── Añadir líneas de albarán a la factura borrador del trabajo ────────────────
@@ -392,7 +460,7 @@ export async function agregarLineasDesdeAlbaran(
   const insertar = db.transaction(() => {
     for (const l of lineas) {
       const coste = l.precio_unitario;
-      const precioFinal = Number((coste * (1 + margen / 100)).toFixed(2));
+      const precioFinal = redondear(coste * (1 + margen / 100));
       stmt.run(
         uuidv4(), facturaId, l.descripcion, l.cantidad, l.unidad ?? null,
         precioFinal, coste, margen, l.id, orden++
@@ -435,16 +503,36 @@ export async function cerrarFactura(id: string): Promise<ResultadoCierre> {
   if (factura.estado !== 'borrador') {
     return { ok: false, error: 'La factura no está en borrador' };
   }
+  // Un número de la serie legal no puede consumirse en un documento vacío.
+  if (!factura.lineas.length) {
+    return { ok: false, error: 'La factura no tiene líneas: no se puede cerrar' };
+  }
+  if (factura.totales.total <= 0) {
+    return { ok: false, error: 'El importe total de la factura debe ser mayor que cero' };
+  }
 
-  const anio = new Date().getFullYear();
-  const numero = await siguienteNumeroFactura(anio);
+  // El año de la serie sale de la FECHA de la factura, no del reloj: una
+  // factura de diciembre cerrada en enero pertenece a la serie de diciembre.
+  const anioFecha = new Date(String(factura.fecha)).getFullYear();
+  const anio = Number.isFinite(anioFecha) ? anioFecha : new Date().getFullYear();
 
-  db.prepare(
-    `UPDATE facturas
-     SET estado = 'cerrada', numero = ?, anio_numero = ?,
-         fecha_cierre = datetime('now'), updated_at = datetime('now')
-     WHERE id = ?`
-  ).run(numero, anio, id);
+  // Numerar y marcar en una sola transacción: dos cierres simultáneos no
+  // pueden leer el mismo MAX y asignar el mismo número.
+  const cerrar = db.transaction((numero: string) => {
+    db.prepare(
+      `UPDATE facturas
+       SET estado = 'cerrada', numero = ?, anio_numero = ?,
+           fecha_cierre = datetime('now'), updated_at = datetime('now')
+       WHERE id = ? AND estado = 'borrador'`
+    ).run(numero, anio, id);
+  });
+  cerrar(await siguienteNumeroFactura(anio));
+
+  // El cierre no pasa por cambiarEstado, así que la sincronización con el
+  // seguimiento (cerrada → pendiente_facturar) hay que dispararla aquí.
+  if (factura.trabajo_id) {
+    syncSeguimientoDesdeDocumento(factura.trabajo_id, 'factura', 'cerrada');
+  }
 
   return { ok: true, factura: await obtenerFactura(id) };
 }
@@ -533,16 +621,16 @@ export async function guardarVersion(factura_id: string, pdf_path: string) {
   // Purgar antiguas
   const versiones = db
     .prepare(
-      `SELECT id FROM factura_versiones
+      `SELECT id, pdf_path FROM factura_versiones
        WHERE factura_id = ?
        ORDER BY numero_version ASC`
     )
-    .all(factura_id) as { id: string }[];
+    .all(factura_id) as { id: string; pdf_path: string | null }[];
 
   if (versiones.length > maxVersiones) {
     const aBorrar = versiones.slice(0, versiones.length - maxVersiones);
     const stmtDel = db.prepare('DELETE FROM factura_versiones WHERE id = ?');
-    aBorrar.forEach(v => stmtDel.run(v.id));
+    aBorrar.forEach(v => { eliminarPdf(v.pdf_path); stmtDel.run(v.id); });
   }
 
   return numero_version;
@@ -552,9 +640,19 @@ export async function guardarVersion(factura_id: string, pdf_path: string) {
 
 export async function eliminarFactura(id: string) {
   const db = getDb();
-  db.prepare('DELETE FROM factura_lineas WHERE factura_id = ?').run(id);
-  db.prepare('DELETE FROM factura_versiones WHERE factura_id = ?').run(id);
-  db.prepare('DELETE FROM facturas WHERE id = ?').run(id);
+  exigirBorrador(id, 'eliminar');
+
+  const pdfs = db
+    .prepare('SELECT pdf_path FROM factura_versiones WHERE factura_id = ?')
+    .all(id) as { pdf_path: string | null }[];
+
+  db.transaction(() => {
+    db.prepare('DELETE FROM factura_lineas WHERE factura_id = ?').run(id);
+    db.prepare('DELETE FROM factura_versiones WHERE factura_id = ?').run(id);
+    db.prepare('DELETE FROM facturas WHERE id = ?').run(id);
+  })();
+
+  pdfs.forEach(v => eliminarPdf(v.pdf_path));
 }
 
 // ─── Borrador sucio (para el launcher) ───────────────────────────────────────

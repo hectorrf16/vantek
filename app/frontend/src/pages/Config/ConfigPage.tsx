@@ -68,6 +68,7 @@ interface AppConfig {
   dashboard: {
     grafico_tipo: string;
     dias_presupuesto_antiguo: number;
+    dias_factura_sin_cobrar?: number;
   };
   email: {
     smtp: {
@@ -127,8 +128,8 @@ function normalizarConfig(raw: any): AppConfig {
   raw.sistema = raw.sistema ?? {};
   if (!raw.sistema.actualizacion) {
     raw.sistema.actualizacion = {
-      hora_inicio: raw.sistema.ventana_inicio ?? '15:00',
-      hora_fin: raw.sistema.ventana_fin ?? '16:00',
+      hora_inicio: raw.sistema.ventana_inicio ?? '03:00',
+      hora_fin: raw.sistema.ventana_fin ?? '05:00',
       inactividad_minutos: raw.sistema.minutos_inactividad ?? 15,
     };
   }
@@ -146,10 +147,11 @@ function useAppConfig() {
   const [mensaje, setMensaje] = useState<{ tipo: 'ok' | 'error'; texto: string } | null>(null);
 
   useEffect(() => {
-    api.get<AppConfig>('/config/app').then(r => {
-      setConfig(normalizarConfig(r.data));
-      setCargando(false);
-    });
+    // Sin .catch, cualquier fallo dejaba la página girando para siempre.
+    api.get<AppConfig>('/config/app')
+      .then(r => setConfig(normalizarConfig(r.data)))
+      .catch(() => setMensaje({ tipo: 'error', texto: 'No se pudo cargar la configuración' }))
+      .finally(() => setCargando(false));
   }, []);
 
   async function guardar(nuevo: AppConfig) {
@@ -349,6 +351,102 @@ function PanelErrores({ emailDestino }: { emailDestino: string }) {
   );
 }
 
+// ─── panel de contraseña de acceso ───────────────────────────────────────────
+// Mientras no haya contraseña, la API responde a cualquiera que llegue por la
+// red local. Al establecerla, todos los endpoints exigen sesión.
+
+function PanelAcceso() {
+  const [configurado, setConfigurado] = useState<boolean | null>(null);
+  const [actual, setActual] = useState('');
+  const [nueva, setNueva] = useState('');
+  const [estado, setEstado] = useState<'idle' | 'enviando'>('idle');
+  const [resultado, setResultado] = useState<{ ok: boolean; texto: string } | null>(null);
+
+  useEffect(() => {
+    api.get('/auth/estado')
+      .then(r => setConfigurado(Boolean(r.data.configurado)))
+      .catch(() => setConfigurado(false));
+  }, []);
+
+  async function guardar() {
+    setEstado('enviando');
+    setResultado(null);
+    try {
+      await api.post('/auth/password', { nueva, actual: actual || undefined });
+      setConfigurado(true);
+      setActual('');
+      setNueva('');
+      setResultado({ ok: true, texto: 'Contraseña guardada. La app pedirá acceso al entrar.' });
+    } catch (err) {
+      setResultado({ ok: false, texto: (err as Error).message });
+    } finally {
+      setEstado('idle');
+    }
+  }
+
+  async function quitar() {
+    setEstado('enviando');
+    setResultado(null);
+    try {
+      await api.delete('/auth/password', { data: { actual } });
+      setConfigurado(false);
+      setActual('');
+      setResultado({ ok: true, texto: 'Acceso sin contraseña restablecido.' });
+    } catch (err) {
+      setResultado({ ok: false, texto: (err as Error).message });
+    } finally {
+      setEstado('idle');
+    }
+  }
+
+  if (configurado === null) return null;
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
+        {configurado
+          ? 'La aplicación pide contraseña al abrirla. Cambia la contraseña o desactiva el acceso protegido.'
+          : 'Ahora mismo cualquier equipo de la red local puede abrir la aplicación y usar la API. Establece una contraseña para exigir acceso.'}
+      </div>
+      <div className="form-grid-2">
+        {configurado && (
+          <Campo label="Contraseña actual">
+            <Input type="password" value={actual} onChange={setActual} />
+          </Campo>
+        )}
+        <Campo label={configurado ? 'Contraseña nueva' : 'Contraseña'} hint="Mínimo 6 caracteres">
+          <Input type="password" value={nueva} onChange={setNueva} />
+        </Campo>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={guardar}
+          disabled={estado === 'enviando' || nueva.length < 6 || (configurado && !actual)}
+        >
+          {configurado ? 'Cambiar contraseña' : 'Activar acceso protegido'}
+        </button>
+        {configurado && (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={quitar}
+            disabled={estado === 'enviando' || !actual}
+          >
+            Desactivar
+          </button>
+        )}
+      </div>
+      {resultado && (
+        <div style={{ fontSize: 12, marginTop: 8, color: resultado.ok ? 'var(--green)' : 'var(--red)' }}>
+          {resultado.ok ? '✓ ' : '✗ '}{resultado.texto}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── panel de borrado total de datos (fresh start) ───────────────────────────
 
 function PanelReset() {
@@ -369,7 +467,7 @@ function PanelReset() {
       setResultado({ ok: true, texto: 'Todos los datos se han borrado. La configuración se ha conservado.' });
       cerrar();
     } catch (err: any) {
-      setResultado({ ok: false, texto: err?.response?.data?.error ?? 'No se pudieron borrar los datos.' });
+      setResultado({ ok: false, texto: (err as Error)?.message ?? 'No se pudieron borrar los datos.' });
     } finally {
       setEstado('idle');
     }
@@ -719,10 +817,10 @@ export default function ConfigPage() {
   const [mostrarDialogoAnio, setMostrarDialogoAnio] = useState(false);
 
   useEffect(() => {
-    if (config && anioDoc < anioActual) {
-      setMostrarDialogoAnio(true);
-    }
-  }, [config]);
+    // Depende del AÑO, no del objeto config: con [config] cualquier tecleo
+    // volvía a abrir el diálogo después de haberlo pospuesto.
+    if (anioDoc < anioActual) setMostrarDialogoAnio(true);
+  }, [anioDoc, anioActual]);
 
   function confirmarNuevoAnio() {
     if (!config) return;
@@ -740,12 +838,24 @@ export default function ConfigPage() {
 
   function set(path: string[], value: any) {
     if (!config) return;
-    const nuevo = JSON.parse(JSON.stringify(config));
+    // Copia superficial por nivel de la ruta editada. El clonado profundo se
+    // ejecutaba en CADA tecla, incluidos los 512 KB de template_html.
+    const nuevo: any = { ...config };
     let obj = nuevo;
-    for (let i = 0; i < path.length - 1; i++) obj = obj[path[i]];
+    for (let i = 0; i < path.length - 1; i++) {
+      obj[path[i]] = { ...obj[path[i]] };
+      obj = obj[path[i]];
+    }
     obj[path[path.length - 1]] = value;
     setConfig(nuevo);
   }
+
+  // parseFloat/parseInt devuelven NaN al vaciar el campo, y NaN se serializa
+  // como null en el PUT (el backend lo guarda sin validar).
+  const num = (v: string, entero = false) => {
+    const n = entero ? parseInt(v, 10) : parseFloat(v);
+    return Number.isFinite(n) ? n : 0;
+  };
 
   function onGuardar() {
     if (config) guardar(config);
@@ -824,7 +934,7 @@ export default function ConfigPage() {
                 </Campo>
                 <Grid2>
                   <Campo label="Precio mano de obra (€/h)">
-                    <Input value={config.empresa.mano_obra_precio_hora} type="number" onChange={v => set(['empresa', 'mano_obra_precio_hora'], parseFloat(v))} />
+                    <Input value={config.empresa.mano_obra_precio_hora} type="number" onChange={v => set(['empresa', 'mano_obra_precio_hora'], num(v))} />
                   </Campo>
                   <Campo label="Unidad mano de obra">
                     <Input value={config.empresa.mano_obra_unidad} placeholder="h" onChange={v => set(['empresa', 'mano_obra_unidad'], v)} />
@@ -838,14 +948,14 @@ export default function ConfigPage() {
               <Seccion titulo="Documentos" desc="Parámetros de facturas y presupuestos">
                 <Grid2>
                   <Campo label="IVA por defecto (%)" hint="Se aplica al subtotal de las facturas">
-                    <Input value={config.documentos.iva_porcentaje} type="number" onChange={v => set(['documentos', 'iva_porcentaje'], parseFloat(v))} />
+                    <Input value={config.documentos.iva_porcentaje} type="number" onChange={v => set(['documentos', 'iva_porcentaje'], num(v))} />
                   </Campo>
                   <Campo label="Margen por defecto (%)" hint="Porcentaje que se aplica al coste del material">
-                    <Input value={config.documentos.margen_defecto} type="number" onChange={v => set(['documentos', 'margen_defecto'], parseFloat(v))} />
+                    <Input value={config.documentos.margen_defecto} type="number" onChange={v => set(['documentos', 'margen_defecto'], num(v))} />
                   </Campo>
                 </Grid2>
                 <Campo label="Versiones máximas por documento" hint="Al superar el límite se elimina la más antigua">
-                  <Input value={config.documentos.max_versiones} type="number" onChange={v => set(['documentos', 'max_versiones'], parseInt(v))} />
+                  <Input value={config.documentos.max_versiones} type="number" onChange={v => set(['documentos', 'max_versiones'], num(v, true))} />
                 </Campo>
                 <div style={{ padding: '12px 14px', background: 'var(--bg-3)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>NUMERACIÓN DE FACTURAS</div>
@@ -879,7 +989,14 @@ export default function ConfigPage() {
                   <Input
                     value={config.dashboard.dias_presupuesto_antiguo}
                     type="number"
-                    onChange={v => set(['dashboard', 'dias_presupuesto_antiguo'], parseInt(v))}
+                    onChange={v => set(['dashboard', 'dias_presupuesto_antiguo'], num(v, true))}
+                  />
+                </Campo>
+                <Campo label="Días para considerar factura sin cobrar" hint="Facturas en pendiente de pago desde hace más de X días aparecerán en rojo">
+                  <Input
+                    value={config.dashboard.dias_factura_sin_cobrar ?? 30}
+                    type="number"
+                    onChange={v => set(['dashboard', 'dias_factura_sin_cobrar'], num(v, true))}
                   />
                 </Campo>
                 <Campo label="Tipo de gráfico económico" hint="Cambia la visualización del resumen económico">
@@ -904,7 +1021,7 @@ export default function ConfigPage() {
                 </Campo>
                 <Grid2>
                   <Campo label="Puerto">
-                    <Input value={config.email.smtp.port} type="number" onChange={v => set(['email', 'smtp', 'port'], parseInt(v))} />
+                    <Input value={config.email.smtp.port} type="number" onChange={v => set(['email', 'smtp', 'port'], num(v, true))} />
                   </Campo>
                   <Campo label="Seguridad">
                     <select
@@ -966,19 +1083,24 @@ export default function ConfigPage() {
             {/* SISTEMA */}
             {tab === 'sistema' && (
               <Seccion titulo="Sistema" desc="Parámetros del servicio y actualizaciones automáticas">
+                <div style={{ paddingBottom: 16 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Acceso a la aplicación</div>
+                  <PanelAcceso />
+                </div>
+
                 <Campo label="Email para notificaciones de error" hint="El launcher enviará aquí los errores críticos">
                   <Input value={config.sistema.email_errores} type="email" onChange={v => set(['sistema', 'email_errores'], v)} />
                 </Campo>
                 <Grid2>
                   <Campo label="Ventana actualización — inicio" hint="Hora en formato HH:MM">
-                    <Input value={config.sistema.actualizacion.hora_inicio} placeholder="15:00" onChange={v => set(['sistema', 'actualizacion', 'hora_inicio'], v)} />
+                    <Input value={config.sistema.actualizacion.hora_inicio} placeholder="03:00" onChange={v => set(['sistema', 'actualizacion', 'hora_inicio'], v)} />
                   </Campo>
                   <Campo label="Ventana actualización — fin" hint="Hora en formato HH:MM">
-                    <Input value={config.sistema.actualizacion.hora_fin} placeholder="16:00" onChange={v => set(['sistema', 'actualizacion', 'hora_fin'], v)} />
+                    <Input value={config.sistema.actualizacion.hora_fin} placeholder="05:00" onChange={v => set(['sistema', 'actualizacion', 'hora_fin'], v)} />
                   </Campo>
                 </Grid2>
                 <Campo label="Minutos de inactividad para actualizar" hint="Solo aplica actualizaciones si el usuario lleva X minutos sin actividad">
-                  <Input value={config.sistema.actualizacion.inactividad_minutos} type="number" onChange={v => set(['sistema', 'actualizacion', 'inactividad_minutos'], parseInt(v))} />
+                  <Input value={config.sistema.actualizacion.inactividad_minutos} type="number" onChange={v => set(['sistema', 'actualizacion', 'inactividad_minutos'], num(v, true))} />
                 </Campo>
 
                 <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 4 }}>
