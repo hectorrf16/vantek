@@ -88,7 +88,7 @@
 [CmdletBinding()]
 param(
     [string] $InstallDir  = 'C:\Vantek',
-    [string] $Repo        = 'HeRoDaRu/vantek',
+    [string] $Repo        = 'hectorrf16/vantek',
     [string] $NodeVersion = '24',
     [string] $Token       = '',
     [switch] $Force
