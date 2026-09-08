@@ -11,6 +11,12 @@
 #     generaban 8-10 PRs triviales. Solo llegan minor y major, que si merecen
 #     revision. Las actualizaciones de SEGURIDAD no se ven afectadas por este
 #     ignore (Dependabot las abre igualmente).
+#   · Se IGNORAN tambien los MAJOR de typescript. Un salto de major rompe la
+#     cadena de herramientas y hay que migrarla a mano (TS7 elimino
+#     moduleResolution node10 y dejo typescript-eslint sin version compatible).
+#     scripts/update-deps.sh ya lo trata como PINNED; esto cierra la puerta que
+#     quedaba abierta por Dependabot. Subirlo es una decision deliberada:
+#     quitar este ignore, migrar y volver a ponerlo.
 
 version: 2
 updates:
@@ -27,6 +33,8 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "npm"
     directory: "/app/backend/"
@@ -41,6 +49,8 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "npm"
     directory: "/app/frontend/"
@@ -55,6 +65,8 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Acciones de los workflows de GitHub Actions (.github/workflows/*). Mantiene
   # actions/checkout, actions/setup-node, upload-artifact, action-gh-release… al

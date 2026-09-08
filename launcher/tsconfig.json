@@ -1,9 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "node",
-    "ignoreDeprecations": "6.0",
+    // nodenext (no CommonJS/node10): TS7 eliminó moduleResolution node10. Sin
+    // "type": "module" en el paquete, se sigue emitiendo CommonJS.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "outDir": "./",
     "rootDir": "./",
     "strict": true,
